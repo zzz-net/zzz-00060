@@ -1,0 +1,15 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #1e293b;
+  --color-accent: #f59e0b;
+  --color-surface: #f8fafc;
+}
+
+body {
+  font-family: 'Noto Sans SC', sans-serif;
+}
