@@ -71,23 +71,41 @@ router.get('/export', (req: Request, res: Response): void => {
   }))
 
   if (format === 'csv') {
-    const flatData = data.map(d => ({
-      异常ID: d.id,
-      批次号: d.batchNo,
-      批次文件: d.batchFileName,
-      表号: d.meterNo,
-      表名: d.meterName,
-      上期读数: d.prevReading,
-      当期读数: d.currReading,
-      用量: d.usage,
-      抄表日期: d.readDate,
-      异常类型: d.anomalyType,
-      规则名称: d.ruleName,
-      异常描述: d.description,
-      状态: d.status,
-      创建时间: d.createdAt,
-      判定记录: (d.judgments as any[]).map(j => `${j.result}(${j.prevStatus}->${j.newStatus})`).join('; '),
-    }))
+    const flatData = data.map(d => {
+      const latest = (d.judgments as any[]).length > 0
+        ? (d.judgments as any[])[(d.judgments as any[]).length - 1]
+        : null
+      return {
+        异常ID: d.id,
+        批次号: d.batchNo,
+        批次文件: d.batchFileName,
+        表号: d.meterNo,
+        表名: d.meterName,
+        上期读数: d.prevReading,
+        当期读数: d.currReading,
+        用量: d.usage,
+        抄表日期: d.readDate,
+        异常类型: d.anomalyType,
+        规则名称: d.ruleName,
+        异常描述: d.description,
+        状态: d.status,
+        创建时间: d.createdAt,
+        最新改判结果: latest?.result ?? '',
+        改判原因: latest?.reason ?? '',
+        改判备注: latest?.note ?? '',
+        改判操作人: latest?.operator ?? '',
+        改判时间: latest?.createdAt ?? '',
+        判定历史: (d.judgments as any[]).map(j => {
+          const parts = [
+            `${j.result}(${j.prevStatus}→${j.newStatus})`,
+            j.reason ? `原因:${j.reason}` : '',
+            j.note ? `备注:${j.note}` : '',
+            j.prevRuleId && j.newRuleId ? `类别变更:${j.prevRuleId}→${j.newRuleId}` : '',
+          ].filter(Boolean)
+          return parts.join(' ; ')
+        }).join(' || '),
+      }
+    })
 
     const csv = Papa.unparse(flatData, { header: true })
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')

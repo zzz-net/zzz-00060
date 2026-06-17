@@ -10,7 +10,8 @@ router.get('/', (req: Request, res: Response): void => {
   let sql = `
     SELECT a.*, r.meterNo, r.meterName, r.prevReading, r.currReading, r.usage, r.readDate,
       ru.name as ruleName, ru.type as ruleType,
-      j.result as latestResult, j.reason as latestReason, j.note as latestNote, j.operator as latestOperator, j.createdAt as latestJudgmentAt
+      j.result as latestResult, j.reason as latestReason, j.note as latestNote, j.operator as latestOperator, j.createdAt as latestJudgmentAt,
+      j.prevRuleId as latestPrevRuleId, j.newRuleId as latestNewRuleId
     FROM anomalies a
     LEFT JOIN readings r ON r.id = a.readingId
     LEFT JOIN rules ru ON ru.id = a.ruleId
@@ -41,7 +42,7 @@ router.get('/', (req: Request, res: Response): void => {
 })
 
 router.post('/:id/judge', (req: Request, res: Response): void => {
-  const { result, reason, note } = req.body
+  const { result, reason, note, newRuleId } = req.body
   if (!result || !['confirm', 'false_positive'].includes(result)) {
     res.status(400).json({ success: false, error: '无效的判定结果，必须为 confirm 或 false_positive' })
     return
@@ -53,22 +54,62 @@ router.post('/:id/judge', (req: Request, res: Response): void => {
     return
   }
 
+  let targetRuleId: string | null = null
+  let targetRuleType: string | null = null
+  let targetRuleVersion: number | null = null
+  let targetDescription: string | null = null
+  if (newRuleId && newRuleId !== anomaly.ruleId) {
+    const rule = db.prepare('SELECT * FROM rules WHERE id = ? AND enabled = 1').get(newRuleId) as any
+    if (!rule) {
+      res.status(400).json({ success: false, error: '目标规则不存在或未启用' })
+      return
+    }
+    targetRuleId = rule.id
+    targetRuleType = rule.type
+    targetRuleVersion = rule.version
+    const reading = db.prepare('SELECT * FROM readings WHERE id = ?').get(anomaly.readingId) as any
+    targetDescription = rule.type === 'spike'
+      ? `人工改判：表号${reading?.meterNo}用量突增`
+      : rule.type === 'negative'
+        ? `人工改判：表号${reading?.meterNo}当前读数为负数`
+        : rule.type === 'rollback'
+          ? `人工改判：表号${reading?.meterNo}读数回退`
+          : rule.type === 'overlimit'
+            ? `人工改判：表号${reading?.meterNo}用量超限`
+            : rule.type === 'null_value'
+              ? `人工改判：表号${reading?.meterNo}读数空值`
+              : `人工改判：表号${reading?.meterNo}`
+  }
+
   const prevStatus = anomaly.status
+  const prevRuleId = anomaly.ruleId
   const newStatus = result === 'confirm' ? 'confirmed' : 'false_positive'
 
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(uuidv4(), anomaly.id, prevStatus, newStatus, result, reason || '', note || '')
+      INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note, prevRuleId, newRuleId)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      uuidv4(), anomaly.id, prevStatus, newStatus, result, reason || '', note || '',
+      targetRuleId ? prevRuleId : '',
+      targetRuleId || '',
+    )
 
-    db.prepare('UPDATE anomalies SET status = ? WHERE id = ?').run(newStatus, anomaly.id)
+    if (targetRuleId) {
+      db.prepare(
+        'UPDATE anomalies SET status = ?, ruleId = ?, ruleVersion = ?, anomalyType = ?, description = ? WHERE id = ?'
+      ).run(newStatus, targetRuleId, targetRuleVersion, targetRuleType, targetDescription, anomaly.id)
+    } else {
+      db.prepare('UPDATE anomalies SET status = ? WHERE id = ?').run(newStatus, anomaly.id)
+    }
   })()
 
   const updated = db.prepare(`
-    SELECT a.*, r.meterNo, r.meterName, r.prevReading, r.currReading, r.usage
+    SELECT a.*, r.meterNo, r.meterName, r.prevReading, r.currReading, r.usage,
+      ru.name as ruleName
     FROM anomalies a
     LEFT JOIN readings r ON r.id = a.readingId
+    LEFT JOIN rules ru ON ru.id = a.ruleId
     WHERE a.id = ?
   `).get(req.params.id)
 
@@ -86,8 +127,8 @@ router.post('/:id/close', (req: Request, res: Response): void => {
 
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note)
-      VALUES (?, ?, ?, 'closed', 'confirm', ?, ?)
+      INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note, prevRuleId, newRuleId)
+      VALUES (?, ?, ?, 'closed', 'confirm', ?, ?, '', '')
     `).run(uuidv4(), anomaly.id, prevStatus, '关闭异常', '')
 
     db.prepare('UPDATE anomalies SET status = ? WHERE id = ?').run('closed', anomaly.id)
@@ -123,8 +164,8 @@ router.post('/:id/reopen', (req: Request, res: Response): void => {
 
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note)
-      VALUES (?, ?, 'closed', ?, 'reopen', ?, ?)
+      INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note, prevRuleId, newRuleId)
+      VALUES (?, ?, 'closed', ?, 'reopen', ?, ?, '', '')
     `).run(uuidv4(), anomaly.id, targetStatus, '重新打开异常', '')
 
     db.prepare('UPDATE anomalies SET status = ? WHERE id = ?').run(targetStatus, anomaly.id)

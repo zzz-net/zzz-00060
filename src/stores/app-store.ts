@@ -40,7 +40,7 @@ interface AppState {
 
   fetchAnomalies: () => Promise<void>;
   setAnomalyFilters: (filters: Partial<AnomalyFilters>) => void;
-  judgeAnomaly: (id: string, data: { result: string; reason: string; note: string }) => Promise<void>;
+  judgeAnomaly: (id: string, data: { result: string; reason: string; note: string; newRuleId?: string }) => Promise<void>;
   closeAnomaly: (id: string) => Promise<void>;
   reopenAnomaly: (id: string) => Promise<void>;
 

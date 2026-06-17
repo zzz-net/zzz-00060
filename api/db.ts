@@ -117,4 +117,12 @@ if (!cols.find(c => c.name === 'contentHash')) {
   db.exec("ALTER TABLE batches ADD COLUMN contentHash TEXT DEFAULT ''")
 }
 
+const jcols = db.prepare("PRAGMA table_info(judgments)").all() as any[]
+if (!jcols.find(c => c.name === 'prevRuleId')) {
+  db.exec("ALTER TABLE judgments ADD COLUMN prevRuleId TEXT DEFAULT ''")
+}
+if (!jcols.find(c => c.name === 'newRuleId')) {
+  db.exec("ALTER TABLE judgments ADD COLUMN newRuleId TEXT DEFAULT ''")
+}
+
 export default db

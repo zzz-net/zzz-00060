@@ -60,6 +60,13 @@ export interface Anomaly {
   ruleName?: string;
   batchNo?: string;
   latestJudgment?: Judgment;
+  latestResult?: string;
+  latestReason?: string;
+  latestNote?: string;
+  latestOperator?: string;
+  latestJudgmentAt?: string;
+  latestPrevRuleId?: string;
+  latestNewRuleId?: string;
 }
 
 export interface Judgment {
@@ -72,6 +79,8 @@ export interface Judgment {
   note: string;
   operator: string;
   createdAt: string;
+  prevRuleId?: string;
+  newRuleId?: string;
 }
 
 export interface ReportSummary {

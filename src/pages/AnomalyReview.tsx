@@ -27,14 +27,17 @@ const anomalyTypeLabels: Record<string, string> = {
 
 function JudgePanel({
   anomaly,
+  rules,
   onClose,
   onJudge,
 }: {
   anomaly: Anomaly;
+  rules: Array<{ id: string; name: string; type: string; enabled?: boolean }>;
   onClose: () => void;
-  onJudge: (id: string, data: { result: string; reason: string; note: string }) => Promise<void>;
+  onJudge: (id: string, data: { result: string; reason: string; note: string; newRuleId?: string }) => Promise<void>;
 }) {
   const [result, setResult] = useState<'confirm' | 'false_positive'>('confirm');
+  const [newRuleId, setNewRuleId] = useState<string>('');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -42,14 +45,17 @@ function JudgePanel({
   const handleSubmit = useCallback(async () => {
     setSubmitting(true);
     try {
-      await onJudge(anomaly.id, { result, reason, note });
+      const payload: { result: string; reason: string; note: string; newRuleId?: string } = { result, reason, note };
+      if (newRuleId && newRuleId !== anomaly.ruleId) {
+        payload.newRuleId = newRuleId;
+      }
+      await onJudge(anomaly.id, payload);
       onClose();
     } catch {
-      // error handled by store
     } finally {
       setSubmitting(false);
     }
-  }, [anomaly.id, result, reason, note, onJudge, onClose]);
+  }, [anomaly.id, anomaly.ruleId, result, newRuleId, reason, note, onJudge, onClose]);
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
@@ -76,6 +82,19 @@ function JudgePanel({
             >
               <option value="confirm">确认异常</option>
               <option value="false_positive">误报</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">变更异常类别（可选，不选则保持原类别）</label>
+            <select
+              value={newRuleId}
+              onChange={(e) => setNewRuleId(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+            >
+              <option value="">保持原类别</option>
+              {rules.filter(r => r.enabled !== false).map((r) => (
+                <option key={r.id} value={r.id}>{r.name}（{anomalyTypeLabels[r.type] ?? r.type}）</option>
+              ))}
             </select>
           </div>
           <div>
@@ -237,8 +256,10 @@ export default function AnomalyReview() {
                           {statusLabels[a.status] ?? a.status}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-500">
-                        {a.latestJudgment ? `${a.latestJudgment.result} - ${a.latestJudgment.reason}` : '-'}
+                      <td className="px-4 py-3 text-xs text-slate-500 whitespace-pre-line max-w-[240px]">
+                        {a.latestJudgment
+                          ? `${a.latestJudgment.result === 'confirm' ? '确认异常' : a.latestJudgment.result === 'false_positive' ? '误报' : a.latestJudgment.result === 'reopen' ? '重开' : a.latestJudgment.result}${a.latestJudgment.reason ? `\n原因：${a.latestJudgment.reason}` : ''}${a.latestJudgment.note ? `\n备注：${a.latestJudgment.note}` : ''}`
+                          : '-'}
                       </td>
                       <td className="px-4 py-3">
                         {a.status === 'pending' && (
@@ -297,6 +318,7 @@ export default function AnomalyReview() {
       {judgingAnomaly && (
         <JudgePanel
           anomaly={judgingAnomaly}
+          rules={rules}
           onClose={() => setJudgingAnomaly(null)}
           onJudge={judgeAnomaly}
         />
