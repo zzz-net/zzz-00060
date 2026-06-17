@@ -10,11 +10,23 @@ const __dirname = path.dirname(__filename)
 
 const router = Router()
 
+interface ConflictFile {
+  name: string
+  path: string
+  size: number
+  modifiedAt: string
+}
+
 interface CheckResultItem {
   pass: boolean
   name: string
   message: string
   details?: string
+  conflictInfo?: {
+    exists: boolean
+    files: ConflictFile[]
+    suggestedAction?: string
+  }
 }
 
 interface CheckResult {
@@ -23,6 +35,20 @@ interface CheckResult {
   items: CheckResultItem[]
   failureSummary: string
   keyLogs: string[]
+  exportConflictInfo?: any
+  conflictResolution?: any
+}
+
+function generateUniqueFileName(dir: string, fileName: string): string {
+  const ext = path.extname(fileName)
+  const baseName = path.basename(fileName, ext)
+  let counter = 1
+  let newName = fileName
+  while (fs.existsSync(path.join(dir, newName))) {
+    newName = `${baseName}_${counter}${ext}`
+    counter++
+  }
+  return newName
 }
 
 function checkConfig(): CheckResultItem {
@@ -99,7 +125,7 @@ function checkSampleFile(): CheckResultItem {
   }
 }
 
-function checkExportDir(): CheckResultItem {
+function checkExportDir(resolvedConflicts?: string[]): CheckResultItem {
   try {
     const exportDir = path.resolve(__dirname, '..', '..')
     const writable = fs.accessSync ? (() => {
@@ -122,23 +148,43 @@ function checkExportDir(): CheckResultItem {
         pass: false,
         name: '导出目录检查',
         message: '导出目录不可写',
-        details: `无法写入: ${exportDir}`,
+        details: `无法写入: ${exportDir}。请检查目录权限或更换导出目录。`,
       }
     }
 
-    const conflicts = ['anomalies_export.csv', 'report.csv', 'report.json']
-      .map(f => path.join(exportDir, f))
-      .filter(f => fs.existsSync(f))
+    const conflictFiles = ['anomalies_export.csv', 'report.csv', 'report.json', 'drill_report.csv', 'drill_report.json']
+      .map(f => ({ name: f, path: path.join(exportDir, f) }))
+      .filter(f => fs.existsSync(f.path) && !(resolvedConflicts?.includes(f.name)))
+      .map(f => {
+        const stat = fs.statSync(f.path)
+        return {
+          name: f.name,
+          path: f.path,
+          size: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+        }
+      })
+
+    const hasConflicts = conflictFiles.length > 0
 
     return {
-      pass: writable,
+      pass: writable && !hasConflicts,
       name: '导出目录检查',
-      message: writable ? '导出目录正常' : '导出目录不可写',
-      details: writable
-        ? (conflicts.length > 0
-            ? `可写，但存在重名文件: ${conflicts.map(c => path.basename(c)).join(', ')}`
-            : '可写，无重名冲突')
-        : `目录不可写: ${exportDir}`,
+      message: !writable
+        ? '导出目录不可写'
+        : hasConflicts
+          ? '导出目录存在重名文件冲突'
+          : '导出目录正常',
+      details: !writable
+        ? `目录不可写: ${exportDir}。请检查目录权限。`
+        : hasConflicts
+          ? `存在重名冲突文件: ${conflictFiles.map(c => c.name).join(', ')}。请处理冲突后重试：改名、覆盖或切换目录。`
+          : '可写，无重名冲突',
+      conflictInfo: {
+        exists: hasConflicts,
+        files: conflictFiles,
+        suggestedAction: hasConflicts ? '请选择冲突处理方式：rename（自动重命名）、overwrite（覆盖）、或切换导出目录' : undefined,
+      },
     }
   } catch (e: unknown) {
     return {
@@ -171,6 +217,8 @@ router.get('/latest', (_req: Request, res: Response): void => {
       sampleFileCheck: JSON.parse(latest.sampleFileCheck),
       exportDirCheck: JSON.parse(latest.exportDirCheck),
       keyLogs: JSON.parse(latest.keyLogs || '[]'),
+      exportConflictInfo: latest.exportConflictInfo ? JSON.parse(latest.exportConflictInfo) : null,
+      conflictResolution: latest.conflictResolution ? JSON.parse(latest.conflictResolution) : null,
     },
   })
 })
@@ -189,6 +237,8 @@ router.get('/history', (_req: Request, res: Response): void => {
     sampleFileCheck: JSON.parse(r.sampleFileCheck),
     exportDirCheck: JSON.parse(r.exportDirCheck),
     keyLogs: JSON.parse(r.keyLogs || '[]'),
+    exportConflictInfo: r.exportConflictInfo ? JSON.parse(r.exportConflictInfo) : null,
+    conflictResolution: r.conflictResolution ? JSON.parse(r.conflictResolution) : null,
   }))
 
   res.json({ success: true, data })
@@ -200,6 +250,15 @@ router.post('/run', (_req: Request, res: Response): void => {
 
   keyLogs.push(`[${new Date().toISOString()}] 开始执行自检...`)
 
+  const latestConfig = db.prepare(`
+    SELECT fileName FROM export_configs
+    WHERE conflictAction IS NOT NULL
+    ORDER BY updatedAt DESC
+    LIMIT 10
+  `).all() as any[]
+
+  const resolvedConflicts = latestConfig.map(c => c.fileName)
+
   const configCheck = checkConfig()
   keyLogs.push(`[${new Date().toISOString()}] 配置检查: ${configCheck.pass ? 'PASS' : 'FAIL'} - ${configCheck.message}`)
 
@@ -209,7 +268,7 @@ router.post('/run', (_req: Request, res: Response): void => {
   const sampleFileCheck = checkSampleFile()
   keyLogs.push(`[${new Date().toISOString()}] 样例文件检查: ${sampleFileCheck.pass ? 'PASS' : 'FAIL'} - ${sampleFileCheck.message}`)
 
-  const exportDirCheck = checkExportDir()
+  const exportDirCheck = checkExportDir(resolvedConflicts)
   keyLogs.push(`[${new Date().toISOString()}] 导出目录检查: ${exportDirCheck.pass ? 'PASS' : 'FAIL'} - ${exportDirCheck.message}`)
 
   const allItems = [configCheck, apiCheck, sampleFileCheck, exportDirCheck]
@@ -221,15 +280,20 @@ router.post('/run', (_req: Request, res: Response): void => {
     ? failedItems.map(f => `${f.name}: ${f.message}${f.details ? ` - ${f.details}` : ''}`).join('; ')
     : ''
 
+  const exportConflictInfo = exportDirCheck.conflictInfo || null
+
   keyLogs.push(`[${new Date().toISOString()}] 自检完成，耗时 ${durationMs}ms，结果: ${allPass ? 'ALL PASS' : `FAILED ${failedItems.length} 项`}`)
+  if (exportConflictInfo?.exists) {
+    keyLogs.push(`[${new Date().toISOString()}] 检测到导出文件名冲突: ${exportConflictInfo.files.map((f: any) => f.name).join(', ')}`)
+  }
 
   db.transaction(() => {
     db.prepare(`
       INSERT INTO self_check_records (
         id, status, checkedAt, durationMs,
         configCheck, apiCheck, sampleFileCheck, exportDirCheck,
-        failureSummary, keyLogs
-      ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?)
+        failureSummary, keyLogs, exportConflictInfo
+      ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       uuidv4(),
       allPass ? 'pass' : 'fail',
@@ -240,6 +304,7 @@ router.post('/run', (_req: Request, res: Response): void => {
       JSON.stringify(exportDirCheck),
       failureSummary,
       JSON.stringify(keyLogs),
+      exportConflictInfo ? JSON.stringify(exportConflictInfo) : '',
     )
   })()
 
@@ -258,8 +323,154 @@ router.post('/run', (_req: Request, res: Response): void => {
       sampleFileCheck: JSON.parse(latest.sampleFileCheck),
       exportDirCheck: JSON.parse(latest.exportDirCheck),
       keyLogs: JSON.parse(latest.keyLogs || '[]'),
+      exportConflictInfo: latest.exportConflictInfo ? JSON.parse(latest.exportConflictInfo) : null,
+      conflictResolution: latest.conflictResolution ? JSON.parse(latest.conflictResolution) : null,
     },
   })
+})
+
+router.get('/export/conflict', (req: Request, res: Response): void => {
+  const fileName = (req.query.fileName as string) || 'report.csv'
+  const exportDir = path.resolve(__dirname, '..', '..')
+
+  const filePath = path.join(exportDir, fileName)
+  const exists = fs.existsSync(filePath)
+
+  let conflictInfo: any = {
+    exists,
+    filePath,
+    fileName,
+  }
+
+  if (exists) {
+    const stat = fs.statSync(filePath)
+    conflictInfo = {
+      ...conflictInfo,
+      fileSize: stat.size,
+      modifiedAt: stat.mtime.toISOString(),
+      suggestedName: generateUniqueFileName(exportDir, fileName),
+    }
+  }
+
+  res.json({ success: true, data: conflictInfo })
+})
+
+router.post('/export/resolve-conflict', (req: Request, res: Response): void => {
+  const { fileName, action, newFileName, exportDir: customExportDir } = req.body
+
+  if (!fileName || !action) {
+    res.status(400).json({ success: false, error: '缺少必要参数: fileName 和 action' })
+    return
+  }
+
+  if (!['rename', 'overwrite', 'cancel'].includes(action)) {
+    res.status(400).json({ success: false, error: '无效的 action，必须是 rename、overwrite 或 cancel' })
+    return
+  }
+
+  const exportDir = customExportDir ? path.resolve(customExportDir) : path.resolve(__dirname, '..', '..')
+
+  if (action !== 'cancel') {
+    try {
+      fs.accessSync(exportDir, fs.constants.W_OK)
+    } catch {
+      res.status(400).json({
+        success: false,
+        error: `导出目录不可写: ${exportDir}。请检查目录权限或更换目录。`,
+        blockedStep: '导出报告',
+        retrySuggestion: '请选择一个可写的目录，或修改当前目录的权限后重试。',
+      })
+      return
+    }
+  }
+
+  const filePath = path.join(exportDir, fileName)
+  const exists = fs.existsSync(filePath)
+
+  let resolution: any = {
+    action,
+    fileName,
+    exportDir,
+    originalFilePath: filePath,
+    resolvedAt: new Date().toISOString(),
+    success: true,
+  }
+
+  if (action === 'cancel') {
+    resolution.success = false
+    resolution.failureReason = '用户取消导出'
+    resolution.retrySuggestion = '如需继续导出，请重新选择导出方式。'
+  } else if (action === 'rename') {
+    const finalName = newFileName || generateUniqueFileName(exportDir, fileName)
+    resolution.newFileName = finalName
+    resolution.finalFilePath = path.join(exportDir, finalName)
+    resolution.failureReason = exists ? `原文件 ${fileName} 已存在，已自动重命名为 ${finalName}` : `使用指定文件名 ${finalName}`
+  } else if (action === 'overwrite') {
+    resolution.finalFilePath = filePath
+    resolution.failureReason = exists ? `将覆盖已存在的文件 ${fileName}` : `文件 ${fileName} 不存在，将新建`
+  }
+
+  const latest = db.prepare(`
+    SELECT id FROM self_check_records
+    ORDER BY checkedAt DESC
+    LIMIT 1
+  `).get() as any
+
+  if (latest) {
+    db.prepare(`
+      UPDATE self_check_records
+      SET conflictResolution = ?
+      WHERE id = ?
+    `).run(JSON.stringify(resolution), latest.id)
+  }
+
+  const configId = uuidv4()
+  db.prepare(`
+    INSERT INTO export_configs (
+      id, exportDir, fileName, format, conflictAction, newFileName, createdAt, updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).run(
+    configId,
+    exportDir,
+    resolution.newFileName || fileName,
+    fileName.endsWith('.json') ? 'json' : 'csv',
+    action,
+    resolution.newFileName || '',
+  )
+
+  res.json({
+    success: resolution.success,
+    data: resolution,
+  })
+})
+
+router.get('/export/config', (_req: Request, res: Response): void => {
+  const configs = db.prepare(`
+    SELECT * FROM export_configs
+    ORDER BY updatedAt DESC
+    LIMIT 10
+  `).all() as any[]
+
+  res.json({ success: true, data: configs })
+})
+
+router.post('/export/config', (req: Request, res: Response): void => {
+  const { exportDir, fileName, format } = req.body
+
+  if (!exportDir || !fileName || !format) {
+    res.status(400).json({ success: false, error: '缺少必要参数: exportDir、fileName、format' })
+    return
+  }
+
+  const id = uuidv4()
+  db.prepare(`
+    INSERT INTO export_configs (
+      id, exportDir, fileName, format, createdAt, updatedAt
+    ) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).run(id, exportDir, fileName, format)
+
+  const saved = db.prepare('SELECT * FROM export_configs WHERE id = ?').get(id)
+  res.json({ success: true, data: saved })
 })
 
 export default router

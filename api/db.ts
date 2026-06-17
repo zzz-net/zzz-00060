@@ -123,7 +123,9 @@ CREATE TABLE IF NOT EXISTS self_check_records (
   sampleFileCheck TEXT NOT NULL,
   exportDirCheck TEXT NOT NULL,
   failureSummary TEXT DEFAULT '',
-  keyLogs TEXT DEFAULT '[]'
+  keyLogs TEXT DEFAULT '[]',
+  exportConflictInfo TEXT DEFAULT '',
+  conflictResolution TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS drill_summaries (
@@ -138,11 +140,25 @@ CREATE TABLE IF NOT EXISTS drill_summaries (
   exportResult TEXT DEFAULT '',
   anomalyCount INTEGER NOT NULL DEFAULT 0,
   exportedFile TEXT DEFAULT '',
-  operator TEXT DEFAULT '演练员'
+  operator TEXT DEFAULT '演练员',
+  completionValidation TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'completed' CHECK(status IN ('completed', 'incomplete', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS export_configs (
+  id TEXT PRIMARY KEY,
+  exportDir TEXT NOT NULL,
+  fileName TEXT NOT NULL,
+  format TEXT NOT NULL CHECK(format IN ('csv', 'json')),
+  conflictAction TEXT CHECK(conflictAction IN ('rename', 'overwrite', 'cancel')),
+  newFileName TEXT DEFAULT '',
+  createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+  updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_self_check_at ON self_check_records(checkedAt);
 CREATE INDEX IF NOT EXISTS idx_drill_at ON drill_summaries(completedAt);
+CREATE INDEX IF NOT EXISTS idx_drill_status ON drill_summaries(status);
 `)
 
 const cols = db.prepare("PRAGMA table_info(batches)").all() as any[]

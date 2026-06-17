@@ -16,9 +16,13 @@ import {
   Zap,
   RotateCcw,
   X,
+  FileWarning,
+  Edit3,
+  FolderOpen,
+  Trash2,
 } from 'lucide-react';
 import { useAppStore } from '@/stores/app-store';
-import type { SelfCheckRecord, DrillSummary, Anomaly } from '@/shared/types';
+import type { SelfCheckRecord, DrillSummary, Anomaly, ExportConflict } from '@/shared/types';
 import { useNavigate } from 'react-router-dom';
 
 const statusLabels: Record<string, string> = {
@@ -157,6 +161,20 @@ function SummaryModal({ summary, onClose }: { summary: DrillSummary; onClose: ()
             </div>
           </div>
 
+          {summary.status && summary.status !== 'completed' && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-medium text-red-800">演练状态: {summary.status === 'incomplete' ? '未完成' : '失败'}</p>
+                  {summary.completionValidation?.failureReason && (
+                    <p className="text-xs text-red-700 mt-1">{summary.completionValidation.failureReason}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div>
             <h4 className="text-sm font-semibold text-slate-700 mb-3">执行步骤</h4>
             <div className="space-y-2">
@@ -174,6 +192,9 @@ function SummaryModal({ summary, onClose }: { summary: DrillSummary; onClose: ()
                     )}
                     {step.completedAt && (
                       <p className="text-xs text-slate-500">完成: {new Date(step.completedAt).toLocaleTimeString()}</p>
+                    )}
+                    {step.error && (
+                      <p className="text-xs text-red-600 mt-1">错误: {step.error}</p>
                     )}
                   </div>
                 </div>
@@ -210,6 +231,165 @@ function SummaryModal({ summary, onClose }: { summary: DrillSummary; onClose: ()
   );
 }
 
+function ExportConflictModal({
+  conflict,
+  fileName,
+  onResolve,
+  onClose,
+}: {
+  conflict: ExportConflict;
+  fileName: string;
+  onResolve: (action: 'rename' | 'overwrite' | 'cancel', newFileName?: string, exportDir?: string) => void;
+  onClose: () => void;
+}) {
+  const [selectedAction, setSelectedAction] = useState<'rename' | 'overwrite' | 'cancel' | null>(null);
+  const [newFileName, setNewFileName] = useState(conflict.suggestedName || '');
+  const [customDir, setCustomDir] = useState('');
+
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes) return '未知';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const handleConfirm = () => {
+    if (!selectedAction) return;
+    onResolve(
+      selectedAction,
+      selectedAction === 'rename' ? newFileName : undefined,
+      customDir || undefined
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+          <div className="flex items-center gap-2">
+            <FileWarning className="w-5 h-5 text-amber-500" />
+            <h3 className="text-lg font-semibold text-slate-800">文件名冲突</h3>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <p className="text-sm font-medium text-amber-800">检测到同名文件已存在</p>
+            <div className="mt-2 text-xs text-amber-700 space-y-1">
+              <p>文件名: <code className="bg-amber-100 px-1.5 py-0.5 rounded">{conflict.fileName}</code></p>
+              <p>文件大小: {formatFileSize(conflict.fileSize)}</p>
+              {conflict.modifiedAt && (
+                <p>修改时间: {new Date(conflict.modifiedAt).toLocaleString()}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-slate-700">请选择处理方式:</p>
+
+            <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+              selectedAction === 'rename'
+                ? 'border-amber-400 bg-amber-50'
+                : 'border-slate-200 hover:border-slate-300'
+            }`}>
+              <input
+                type="radio"
+                name="conflictAction"
+                checked={selectedAction === 'rename'}
+                onChange={() => setSelectedAction('rename')}
+                className="mt-1"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <Edit3 className="w-4 h-4 text-slate-500" />
+                  <span className="text-sm font-medium text-slate-800">自动重命名</span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">系统自动生成不重复的文件名</p>
+                {selectedAction === 'rename' && (
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      value={newFileName}
+                      onChange={(e) => setNewFileName(e.target.value)}
+                      className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                      placeholder="输入新文件名"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">建议: {conflict.suggestedName}</p>
+                  </div>
+                )}
+              </div>
+            </label>
+
+            <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+              selectedAction === 'overwrite'
+                ? 'border-amber-400 bg-amber-50'
+                : 'border-slate-200 hover:border-slate-300'
+            }`}>
+              <input
+                type="radio"
+                name="conflictAction"
+                checked={selectedAction === 'overwrite'}
+                onChange={() => setSelectedAction('overwrite')}
+                className="mt-1"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                  <span className="text-sm font-medium text-slate-800">覆盖原有文件</span>
+                </div>
+                <p className="text-xs text-red-500 mt-1">原有文件内容将被永久删除，此操作不可撤销</p>
+              </div>
+            </label>
+
+            <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+              customDir
+                ? 'border-amber-400 bg-amber-50'
+                : 'border-slate-200 hover:border-slate-300'
+            }`}>
+              <div className="mt-1">
+                <FolderOpen className="w-4 h-4 text-slate-500" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-slate-800">切换导出目录</span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">指定一个新的目录路径保存文件</p>
+                <input
+                  type="text"
+                  value={customDir}
+                  onChange={(e) => {
+                    setCustomDir(e.target.value);
+                    if (e.target.value) setSelectedAction('rename');
+                  }}
+                  className="mt-2 w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  placeholder="例如: C:/Users/Documents/Exports"
+                />
+              </div>
+            </label>
+          </div>
+        </div>
+        <div className="p-5 border-t border-slate-200 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 bg-slate-100 text-slate-700 rounded-lg py-2 text-sm font-medium hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={!selectedAction}
+            className="flex-1 bg-amber-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            确认并继续
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Checklist() {
   const {
     selfCheckLatest,
@@ -219,13 +399,17 @@ export default function Checklist() {
     drillSummariesLoading,
     currentDrillSteps,
     drillStartedAt,
+    drillCompletionValidation,
     anomalies,
+    exportConflict,
+    exportConflictLoading,
     fetchSelfCheckLatest,
     fetchSelfCheckHistory,
     runSelfCheck,
     fetchDrillSummaries,
     startDrill,
     updateDrillStep,
+    validateDrillCompletion,
     completeDrill,
     clearCurrentDrill,
     fetchAnomalies,
@@ -233,6 +417,9 @@ export default function Checklist() {
     judgeAnomaly,
     closeAnomaly,
     reopenAnomaly,
+    checkExportConflict,
+    resolveExportConflict,
+    fetchExportConfigs,
   } = useAppStore();
 
   const navigate = useNavigate();
@@ -240,18 +427,33 @@ export default function Checklist() {
   const [showSummary, setShowSummary] = useState(false);
   const [selectedSummary, setSelectedSummary] = useState<DrillSummary | null>(null);
   const [drillError, setDrillError] = useState('');
+  const [drillBlockedStep, setDrillBlockedStep] = useState('');
+  const [drillRetrySuggestion, setDrillRetrySuggestion] = useState('');
+  const [showExportConflict, setShowExportConflict] = useState(false);
+  const [pendingExportFormat, setPendingExportFormat] = useState<'csv' | 'json' | null>(null);
+  const [conflictFileName, setConflictFileName] = useState('');
 
   useEffect(() => {
     fetchSelfCheckLatest();
     fetchSelfCheckHistory();
     fetchDrillSummaries();
     fetchAnomalies();
-  }, [fetchSelfCheckLatest, fetchSelfCheckHistory, fetchDrillSummaries, fetchAnomalies]);
+    fetchExportConfigs();
+  }, [fetchSelfCheckLatest, fetchSelfCheckHistory, fetchDrillSummaries, fetchAnomalies, fetchExportConfigs]);
+
+  useEffect(() => {
+    if (currentDrillSteps.length > 0) {
+      validateDrillCompletion().catch(() => {});
+    }
+  }, [currentDrillSteps, validateDrillCompletion]);
 
   const handleRunCheck = useCallback(async () => {
     try {
       await runSelfCheck();
       await fetchSelfCheckHistory();
+      setDrillError('');
+      setDrillBlockedStep('');
+      setDrillRetrySuggestion('');
     } catch (err: unknown) {
       // error handled in UI
     }
@@ -260,6 +462,8 @@ export default function Checklist() {
   const handleStartDrill = useCallback(() => {
     startDrill();
     setDrillError('');
+    setDrillBlockedStep('');
+    setDrillRetrySuggestion('');
   }, [startDrill]);
 
   const handleStepImport = useCallback(async () => {
@@ -337,49 +541,152 @@ export default function Checklist() {
   const handleStepExport = useCallback(async () => {
     updateDrillStep('export', { status: 'running', startedAt: new Date().toISOString() });
     try {
-      const res = await fetch('/api/report/export?format=csv');
-      if (!res.ok) throw new Error('导出失败');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'drill_report.csv';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const conflictCheck = await checkExportConflict('drill_report.csv');
+      if (conflictCheck.exists) {
+        setConflictFileName('drill_report.csv');
+        setPendingExportFormat('csv');
+        setShowExportConflict(true);
+        return;
+      }
+
+      await performExport('csv', 'drill_report.csv');
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const res2 = await fetch('/api/report/export?format=json');
-      if (!res2.ok) throw new Error('JSON导出失败');
-      const blob2 = await res2.blob();
-      const url2 = URL.createObjectURL(blob2);
-      const a2 = document.createElement('a');
-      a2.href = url2;
-      a2.download = 'drill_report.json';
-      document.body.appendChild(a2);
-      a2.click();
-      document.body.removeChild(a2);
-      URL.revokeObjectURL(url2);
+      const conflictCheckJson = await checkExportConflict('drill_report.json');
+      if (conflictCheckJson.exists) {
+        setConflictFileName('drill_report.json');
+        setPendingExportFormat('json');
+        setShowExportConflict(true);
+        return;
+      }
+
+      await performExport('json', 'drill_report.json');
 
       updateDrillStep('export', {
         status: 'completed',
         completedAt: new Date().toISOString(),
         result: { files: ['drill_report.csv', 'drill_report.json'], success: true },
       });
+      setDrillError('');
+      setDrillBlockedStep('');
+      setDrillRetrySuggestion('');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '导出失败';
       updateDrillStep('export', { status: 'failed', completedAt: new Date().toISOString(), error: msg });
       setDrillError(`导出报告失败: ${msg}`);
+      if (err instanceof Error) {
+        setDrillBlockedStep((err as any).blockedStep || '导出报告');
+        setDrillRetrySuggestion((err as any).retrySuggestion || '请检查导出目录权限，或更换文件名后重试。');
+      }
     }
-  }, [updateDrillStep]);
+  }, [updateDrillStep, checkExportConflict]);
+
+  const performExport = async (format: 'csv' | 'json', fileName: string) => {
+    const res = await fetch(`/api/report/export?format=${format}`);
+    if (!res.ok) throw new Error(`${format.toUpperCase()}导出失败`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleResolveConflict = useCallback(async (
+    action: 'rename' | 'overwrite' | 'cancel',
+    newFileName?: string,
+    exportDir?: string
+  ) => {
+    try {
+      const resolution = await resolveExportConflict({
+        fileName: conflictFileName,
+        action,
+        newFileName,
+        exportDir,
+      });
+
+      if (action === 'cancel') {
+        updateDrillStep('export', {
+          status: 'failed',
+          completedAt: new Date().toISOString(),
+          error: '用户取消导出，未处理文件名冲突',
+        });
+        setDrillError('导出报告失败: 用户取消了文件名冲突处理。必须处理冲突才能完成演练。');
+        setDrillBlockedStep('导出报告');
+        setDrillRetrySuggestion('请重新点击「导出报告」，并选择合适的冲突处理方式（改名或覆盖）。');
+        setShowExportConflict(false);
+        return;
+      }
+
+      const finalFileName = resolution.newFileName || conflictFileName;
+
+      if (pendingExportFormat === 'csv') {
+        await performExport('csv', finalFileName);
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        const jsonConflict = await checkExportConflict('drill_report.json');
+        if (jsonConflict.exists) {
+          setConflictFileName('drill_report.json');
+          setPendingExportFormat('json');
+          return;
+        }
+        await performExport('json', 'drill_report.json');
+      } else if (pendingExportFormat === 'json') {
+        await performExport('json', finalFileName);
+      }
+
+      updateDrillStep('export', {
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        result: {
+          files: pendingExportFormat === 'csv'
+            ? [finalFileName, 'drill_report.json']
+            : ['drill_report.csv', finalFileName],
+          success: true,
+          conflictResolution: resolution,
+        },
+      });
+
+      setShowExportConflict(false);
+      setPendingExportFormat(null);
+      setConflictFileName('');
+      setDrillError('');
+      setDrillBlockedStep('');
+      setDrillRetrySuggestion('');
+
+      await fetchSelfCheckLatest();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '冲突处理失败';
+      updateDrillStep('export', { status: 'failed', completedAt: new Date().toISOString(), error: msg });
+      setDrillError(`导出报告失败: ${msg}`);
+      if (err instanceof Error) {
+        setDrillBlockedStep((err as any).blockedStep || '导出报告');
+        setDrillRetrySuggestion((err as any).retrySuggestion || '请重新处理文件名冲突。');
+      }
+      setShowExportConflict(false);
+    }
+  }, [conflictFileName, pendingExportFormat, resolveExportConflict, updateDrillStep, checkExportConflict, performExport, fetchSelfCheckLatest]);
 
   const handleCompleteDrill = useCallback(async () => {
     try {
+      const validation = await validateDrillCompletion();
+      if (!validation.completeValidationPassed) {
+        setDrillError(validation.failureReason || '演练完成验证未通过');
+        setDrillBlockedStep(validation.blockedStep || '');
+        setDrillRetrySuggestion(validation.retrySuggestion || '');
+        return;
+      }
+
       const allCompleted = currentDrillSteps.every(s => s.status === 'completed');
       if (!allCompleted) {
         setDrillError('请先完成所有演练步骤');
+        setDrillBlockedStep('未完成步骤');
+        setDrillRetrySuggestion('请点击失败步骤的「重试」按钮，或重置演练后重新执行。');
         return;
       }
       const importStep = currentDrillSteps.find(s => s.id === 'import');
@@ -393,21 +700,28 @@ export default function Checklist() {
         closeReopenResult: closeStep?.result,
         exportResult: exportStep?.result,
         anomalyCount: anomalies.length,
-        exportedFile: 'drill_report.csv, drill_report.json',
+        exportedFile: exportStep?.result?.files?.join(', ') || 'drill_report.csv, drill_report.json',
         operator: '演练员',
       });
       setSelectedSummary(summary);
       setShowSummary(true);
       clearCurrentDrill();
       setDrillError('');
+      setDrillBlockedStep('');
+      setDrillRetrySuggestion('');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '保存演练摘要失败';
       setDrillError(msg);
+      if (err instanceof Error) {
+        setDrillBlockedStep((err as any).blockedStep || '');
+        setDrillRetrySuggestion((err as any).retrySuggestion || '');
+      }
     }
-  }, [currentDrillSteps, completeDrill, anomalies.length, clearCurrentDrill]);
+  }, [currentDrillSteps, completeDrill, anomalies.length, clearCurrentDrill, validateDrillCompletion]);
 
   const canStartDrill = selfCheckLatest?.status === 'pass';
   const allStepsCompleted = currentDrillSteps.length > 0 && currentDrillSteps.every(s => s.status === 'completed');
+  const canCompleteDrill = allStepsCompleted && drillCompletionValidation?.completeValidationPassed;
 
   const checkItems = selfCheckLatest
     ? [selfCheckLatest.configCheck, selfCheckLatest.apiCheck, selfCheckLatest.sampleFileCheck, selfCheckLatest.exportDirCheck]
@@ -549,15 +863,49 @@ export default function Checklist() {
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
               <div className="flex items-start gap-2">
                 <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                <div>
+                <div className="flex-1">
                   <p className="text-sm font-medium text-red-800">演练出错</p>
                   <p className="text-sm text-red-700 mt-1">{drillError}</p>
+                  {drillBlockedStep && (
+                    <p className="text-xs text-red-600 mt-2">
+                      <span className="font-medium">卡住步骤:</span> {drillBlockedStep}
+                    </p>
+                  )}
+                  {drillRetrySuggestion && (
+                    <p className="text-xs text-red-600 mt-1">
+                      <span className="font-medium">重试建议:</span> {drillRetrySuggestion}
+                    </p>
+                  )}
                   <button
                     onClick={() => setDrillError('')}
                     className="text-xs text-red-600 hover:text-red-700 mt-2"
                   >
                     重试该步骤
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {drillStartedAt && drillCompletionValidation && !drillCompletionValidation.completeValidationPassed && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800">演练完成验证未通过</p>
+                  {drillCompletionValidation.failureReason && (
+                    <p className="text-xs text-amber-700 mt-1">{drillCompletionValidation.failureReason}</p>
+                  )}
+                  {drillCompletionValidation.blockedStep && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      <span className="font-medium">卡住步骤:</span> {drillCompletionValidation.blockedStep}
+                    </p>
+                  )}
+                  {drillCompletionValidation.retrySuggestion && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      <span className="font-medium">重试建议:</span> {drillCompletionValidation.retrySuggestion}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -590,9 +938,14 @@ export default function Checklist() {
               {allStepsCompleted && (
                 <button
                   onClick={handleCompleteDrill}
-                  className="w-full bg-green-500 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-green-600 transition-colors"
+                  disabled={!canCompleteDrill}
+                  className={`w-full rounded-lg py-2.5 text-sm font-medium transition-colors ${
+                    canCompleteDrill
+                      ? 'bg-green-500 text-white hover:bg-green-600'
+                      : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                  }`}
                 >
-                  完成演练，生成摘要
+                  {canCompleteDrill ? '完成演练，生成摘要' : '请完成所有验证条件'}
                 </button>
               )}
             </div>
@@ -623,6 +976,7 @@ export default function Checklist() {
               <thead>
                 <tr className="border-b border-slate-100 text-slate-500 text-left">
                   <th className="px-4 py-3 font-medium">开始时间</th>
+                  <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">耗时</th>
                   <th className="px-4 py-3 font-medium">异常数</th>
                   <th className="px-4 py-3 font-medium">导出文件</th>
@@ -634,6 +988,17 @@ export default function Checklist() {
                 {drillSummaries.map((s) => (
                   <tr key={s.id} className="border-b border-slate-50 hover:bg-slate-50/50">
                     <td className="px-4 py-3 text-slate-800">{new Date(s.startedAt).toLocaleString()}</td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                        s.status === 'completed'
+                          ? 'bg-green-100 text-green-700'
+                          : s.status === 'incomplete'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-red-100 text-red-700'
+                      }`}>
+                        {s.status === 'completed' ? '已完成' : s.status === 'incomplete' ? '未完成' : '失败'}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{(s.durationMs / 1000).toFixed(1)}s</td>
                     <td className="px-4 py-3">
                       <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs font-medium">
@@ -734,6 +1099,19 @@ export default function Checklist() {
 
       {showSummary && selectedSummary && (
         <SummaryModal summary={selectedSummary} onClose={() => { setShowSummary(false); setSelectedSummary(null); }} />
+      )}
+
+      {showExportConflict && exportConflict && (
+        <ExportConflictModal
+          conflict={exportConflict}
+          fileName={conflictFileName}
+          onResolve={handleResolveConflict}
+          onClose={() => {
+            setShowExportConflict(false);
+            setPendingExportFormat(null);
+            setConflictFileName('');
+          }}
+        />
       )}
     </div>
   );

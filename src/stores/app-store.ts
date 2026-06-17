@@ -1,5 +1,9 @@
 import { create } from 'zustand';
-import type { Batch, Rule, Anomaly, ReportSummary, SelfCheckRecord, DrillSummary, DrillStep } from '@/shared/types';
+import type {
+  Batch, Rule, Anomaly, ReportSummary, SelfCheckRecord,
+  DrillSummary, DrillStep, ExportConflict, ExportConfig,
+  DrillCompletionValidation
+} from '@/shared/types';
 
 interface AnomalyFilters {
   batchId: string;
@@ -37,6 +41,12 @@ interface AppState {
   drillSummariesLoading: boolean;
   currentDrillSteps: DrillStep[];
   drillStartedAt: string | null;
+  drillCompletionValidation: DrillCompletionValidation | null;
+
+  exportConflict: ExportConflict | null;
+  exportConflictLoading: boolean;
+  exportConfigs: ExportConfig[];
+  currentExportConfig: ExportConfig | null;
 
   fetchBatches: () => Promise<void>;
   importBatch: (file: File) => Promise<void>;
@@ -62,6 +72,7 @@ interface AppState {
   fetchDrillSummaries: () => Promise<void>;
   startDrill: () => void;
   updateDrillStep: (stepId: string, updates: Partial<DrillStep>) => void;
+  validateDrillCompletion: () => Promise<DrillCompletionValidation>;
   completeDrill: (data: {
     importResult?: any;
     judgeResult?: any;
@@ -72,6 +83,20 @@ interface AppState {
     operator?: string;
   }) => Promise<DrillSummary>;
   clearCurrentDrill: () => void;
+
+  checkExportConflict: (fileName: string) => Promise<ExportConflict>;
+  resolveExportConflict: (data: {
+    fileName: string;
+    action: 'rename' | 'overwrite' | 'cancel';
+    newFileName?: string;
+    exportDir?: string;
+  }) => Promise<any>;
+  fetchExportConfigs: () => Promise<void>;
+  saveExportConfig: (data: {
+    exportDir: string;
+    fileName: string;
+    format: 'csv' | 'json';
+  }) => Promise<ExportConfig>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -103,6 +128,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   drillSummariesLoading: false,
   currentDrillSteps: [],
   drillStartedAt: null,
+  drillCompletionValidation: null,
+
+  exportConflict: null,
+  exportConflictLoading: false,
+  exportConfigs: [],
+  currentExportConfig: null,
 
   fetchBatches: async () => {
     set({ batchesLoading: true });
@@ -365,6 +396,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  validateDrillCompletion: async () => {
+    const { currentDrillSteps } = get();
+    const res = await fetch('/api/drill/validate-completion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ steps: currentDrillSteps }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '验证失败');
+    }
+
+    const json = await res.json();
+    set({ drillCompletionValidation: json.data });
+    return json.data;
+  },
+
   completeDrill: async (data) => {
     const { currentDrillSteps, drillStartedAt } = get();
     const durationMs = drillStartedAt
@@ -382,14 +431,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     });
 
+    const json = await res.json();
+
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || '保存演练摘要失败');
+      set({
+        drillCompletionValidation: json.data?.validation || null,
+      });
+      await get().fetchDrillSummaries();
+      const error = new Error(json.error || '保存演练摘要失败');
+      (error as any).blockedStep = json.blockedStep;
+      (error as any).retrySuggestion = json.retrySuggestion;
+      (error as any).validation = json.data?.validation;
+      (error as any).drillId = json.data?.id;
+      throw error;
     }
 
-    const json = await res.json();
     set({
       drillStartedAt: null,
+      drillCompletionValidation: json.data?.completionValidation || null,
     });
     await get().fetchDrillSummaries();
     return json.data;
@@ -399,6 +458,74 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       currentDrillSteps: [],
       drillStartedAt: null,
+      drillCompletionValidation: null,
+      exportConflict: null,
     });
+  },
+
+  checkExportConflict: async (fileName: string) => {
+    set({ exportConflictLoading: true });
+    try {
+      const res = await fetch(`/api/check/export/conflict?fileName=${encodeURIComponent(fileName)}`);
+      const json = await res.json();
+      set({
+        exportConflict: json.data,
+        exportConflictLoading: false,
+      });
+      return json.data;
+    } catch (err) {
+      set({ exportConflictLoading: false });
+      throw err;
+    }
+  },
+
+  resolveExportConflict: async (data) => {
+    const res = await fetch('/api/check/export/resolve-conflict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    const json = await res.json();
+
+    if (!res.ok) {
+      const error = new Error(json.error || '冲突处理失败');
+      (error as any).blockedStep = json.blockedStep;
+      (error as any).retrySuggestion = json.retrySuggestion;
+      throw error;
+    }
+
+    await get().fetchSelfCheckLatest();
+    await get().fetchExportConfigs();
+
+    return json.data;
+  },
+
+  fetchExportConfigs: async () => {
+    try {
+      const res = await fetch('/api/check/export/config');
+      const json = await res.json();
+      set({ exportConfigs: json.data ?? [] });
+    } catch {
+      // ignore
+    }
+  },
+
+  saveExportConfig: async (data) => {
+    const res = await fetch('/api/check/export/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '保存导出配置失败');
+    }
+
+    const json = await res.json();
+    set({ currentExportConfig: json.data });
+    await get().fetchExportConfigs();
+    return json.data;
   },
 }));

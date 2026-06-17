@@ -93,11 +93,23 @@ export interface ReportSummary {
   byBatch: Array<{ batchId: string; batchNo: string; count: number }>;
 }
 
+export interface ConflictFile {
+  name: string;
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+
 export interface CheckItem {
   pass: boolean;
   name: string;
   message: string;
   details?: string;
+  conflictInfo?: {
+    exists: boolean;
+    files: ConflictFile[];
+    suggestedAction?: string;
+  };
 }
 
 export interface SelfCheckRecord {
@@ -111,6 +123,23 @@ export interface SelfCheckRecord {
   exportDirCheck: CheckItem;
   failureSummary: string;
   keyLogs: string[];
+  exportConflictInfo?: {
+    exists: boolean;
+    files: ConflictFile[];
+    suggestedAction?: string;
+  } | null;
+  conflictResolution?: {
+    action: 'rename' | 'overwrite' | 'cancel';
+    fileName: string;
+    exportDir: string;
+    originalFilePath: string;
+    resolvedAt: string;
+    success: boolean;
+    newFileName?: string;
+    finalFilePath?: string;
+    failureReason?: string;
+    retrySuggestion?: string;
+  } | null;
 }
 
 export interface DrillStep {
@@ -122,6 +151,38 @@ export interface DrillStep {
   completedAt?: string;
   result?: any;
   error?: string;
+}
+
+export interface ExportConfig {
+  id: string;
+  exportDir: string;
+  fileName: string;
+  format: 'csv' | 'json';
+  conflictAction: 'rename' | 'overwrite' | 'cancel' | null;
+  newFileName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExportConflict {
+  exists: boolean;
+  filePath: string;
+  fileName: string;
+  fileSize?: number;
+  modifiedAt?: string;
+  suggestedName?: string;
+}
+
+export interface DrillCompletionValidation {
+  allStepsCompleted: boolean;
+  selfCheckPassed: boolean;
+  noSkippedFailedSteps: boolean;
+  allStepsExecuted: boolean;
+  exportConflictResolved: boolean;
+  completeValidationPassed: boolean;
+  failureReason?: string;
+  blockedStep?: string;
+  retrySuggestion?: string;
 }
 
 export interface DrillSummary {
@@ -137,4 +198,6 @@ export interface DrillSummary {
   anomalyCount: number;
   exportedFile: string;
   operator: string;
+  completionValidation?: DrillCompletionValidation;
+  status?: 'completed' | 'incomplete' | 'failed';
 }
