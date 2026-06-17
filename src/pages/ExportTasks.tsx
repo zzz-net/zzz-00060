@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Download, Plus, RefreshCw, X, Clock, CheckCircle, XCircle, AlertCircle,
   Pause, FolderOpen, FileJson, FileSpreadsheet, RotateCcw, Eye, Trash2,
-  ChevronDown, ChevronRight, FileWarning, Edit3, Filter, FileCheck
+  ChevronDown, ChevronRight, FileWarning, Edit3, Filter, FileCheck, ShieldCheck
 } from 'lucide-react';
 import { useAppStore } from '@/stores/app-store';
-import type { ExportTask, ExportTaskStatus, ExportConflictAction } from '@/shared/types';
+import type { ExportTask, ExportTaskStatus, ExportConflictAction, ExportTaskVerifyResult } from '@/shared/types';
 
 const statusConfig: Record<ExportTaskStatus, { label: string; color: string; bg: string; icon: any }> = {
   queued: { label: '排队中', color: 'text-slate-600', bg: 'bg-slate-100', icon: Clock },
@@ -30,6 +30,8 @@ export default function ExportTasks() {
     exportTaskSummary,
     exportFilterOptions,
     exportGeneratedFiles,
+    exportAuditLog,
+    exportAuditMeta,
     fetchExportTaskSummary,
     fetchExportTasks,
     createExportTask,
@@ -40,6 +42,8 @@ export default function ExportTasks() {
     preflightCheckConflict,
     fetchExportFilterOptions,
     fetchExportGeneratedFiles,
+    verifyExportTask,
+    fetchExportAuditLog,
   } = useAppStore();
 
   const [showCreate, setShowCreate] = useState(false);
@@ -67,7 +71,8 @@ export default function ExportTasks() {
   const [changeDirValue, setChangeDirValue] = useState('');
 
   const [pollTimer, setPollTimer] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'tasks' | 'files'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'files' | 'audit'>('tasks');
+  const [verifyResult, setVerifyResult] = useState<ExportTaskVerifyResult | null>(null);
 
   useEffect(() => {
     fetchExportTaskSummary();
@@ -79,6 +84,7 @@ export default function ExportTasks() {
       fetchExportTaskSummary();
       fetchExportTasks(statusFilter ? { status: statusFilter } : undefined);
       if (activeTab === 'files') fetchExportGeneratedFiles();
+      if (activeTab === 'audit') fetchExportAuditLog();
     }, 3000);
     setPollTimer(timer);
 
@@ -164,6 +170,15 @@ export default function ExportTasks() {
     }
   }, [changeDirTask, changeDirValue, changeDirRetryExportTask]);
 
+  const handleVerify = useCallback(async (taskId: string) => {
+    try {
+      const result = await verifyExportTask(taskId);
+      setVerifyResult(result);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : '校验失败');
+    }
+  }, [verifyExportTask]);
+
   const needsConflictResolution = (task: ExportTask) => {
     return task.status === 'queued' && task.conflictInfo?.exists && !task.conflictAction;
   };
@@ -179,8 +194,8 @@ export default function ExportTasks() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">导出任务台</h2>
-          <p className="text-sm text-slate-500 mt-1">管理所有报告导出任务，支持创建、重试、冲突处理和结果查看</p>
+          <h2 className="text-2xl font-bold text-slate-800">导出审计中心</h2>
+          <p className="text-sm text-slate-500 mt-1">管理所有报告导出任务，支持创建、重试、冲突处理、一致性校验和审计日志查看</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
@@ -222,7 +237,7 @@ export default function ExportTasks() {
         <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h3 className="text-base font-semibold text-slate-700">
-              {activeTab === 'tasks' ? '任务列表' : '已生成文件'}
+              {activeTab === 'tasks' ? '任务列表' : activeTab === 'files' ? '已生成文件' : '审计日志'}
             </h3>
             <div className="flex bg-slate-100 rounded-lg p-0.5">
               <button
@@ -241,6 +256,15 @@ export default function ExportTasks() {
               >
                 <FileCheck className="w-3 h-3 inline mr-1" />
                 已生成文件
+              </button>
+              <button
+                onClick={() => { setActiveTab('audit'); fetchExportAuditLog(); }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                  activeTab === 'audit' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <ShieldCheck className="w-3 h-3 inline mr-1" />
+                审计日志
               </button>
             </div>
           </div>
@@ -371,6 +395,15 @@ export default function ExportTasks() {
                           title="换目录重试"
                         >
                           <FolderOpen className="w-4 h-4" />
+                        </button>
+                      )}
+                      {task.status === 'success' && task.finalFilePath && (
+                        <button
+                          onClick={() => handleVerify(task.id)}
+                          className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors"
+                          title="一致性校验"
+                        >
+                          <ShieldCheck className="w-4 h-4" />
                         </button>
                       )}
                       {['queued', 'running'].includes(task.status) && (
@@ -573,6 +606,85 @@ export default function ExportTasks() {
             )}
             <div className="px-5 py-3 text-center text-xs text-slate-400 border-t border-slate-100">
               共 {exportGeneratedFiles.length} 个已生成文件
+            </div>
+          </div>
+        )}
+        {activeTab === 'audit' && (
+          <div>
+            {exportAuditMeta && !exportAuditMeta.allConsistent && (
+              <div className="px-5 py-3 bg-amber-50 border-b border-amber-200">
+                <div className="flex items-center gap-2 text-sm text-amber-700">
+                  <AlertCircle className="w-4 h-4" />
+                  <span>发现 {exportAuditMeta.inconsistentCount} 个任务的磁盘文件与记录不一致</span>
+                </div>
+              </div>
+            )}
+            {exportAuditMeta && exportAuditMeta.allConsistent && exportAuditLog.length > 0 && (
+              <div className="px-5 py-3 bg-green-50 border-b border-green-200">
+                <div className="flex items-center gap-2 text-sm text-green-700">
+                  <CheckCircle className="w-4 h-4" />
+                  <span>所有任务磁盘文件与记录一致</span>
+                </div>
+              </div>
+            )}
+            {exportAuditLog.length === 0 ? (
+              <div className="text-center py-12 text-sm text-slate-400">暂无审计日志</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {exportAuditLog.map((entry) => {
+                  const cfg = statusConfig[entry.status as ExportTaskStatus] || statusConfig.queued;
+                  return (
+                    <div key={entry.taskId} className="px-5 py-3 flex items-center gap-4 hover:bg-slate-50">
+                      <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center shrink-0">
+                        {entry.format === 'csv' ? (
+                          <FileSpreadsheet className="w-4 h-4 text-slate-500" />
+                        ) : (
+                          <FileJson className="w-4 h-4 text-slate-500" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm font-medium text-slate-800">{entry.taskNo}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.color}`}>
+                            {cfg.label}
+                          </span>
+                          {entry.diskConsistent === true && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">磁盘一致</span>
+                          )}
+                          {entry.diskConsistent === false && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700">磁盘不一致</span>
+                          )}
+                          {entry.diskConsistent === null && entry.status === 'success' && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">未校验</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5 truncate">
+                          {entry.finalFileName || entry.fileName} · {entry.exportDir}
+                          {entry.fileSize > 0 && ` · ${formatFileSize(entry.fileSize)}`}
+                          {entry.durationMs > 0 && ` · ${entry.durationMs}ms`}
+                          {entry.conflictAction && ` · 冲突处理: ${entry.conflictAction}`}
+                        </div>
+                        {entry.failureReason && (
+                          <div className="text-xs text-red-600 mt-0.5">{entry.failureReason}</div>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-400 shrink-0">
+                        {entry.operator} · {entry.completedAt ? new Date(entry.completedAt).toLocaleString() : new Date(entry.createdAt).toLocaleString()}
+                      </div>
+                      <button
+                        onClick={() => handleVerify(entry.taskId)}
+                        className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors shrink-0"
+                        title="一致性校验"
+                      >
+                        <ShieldCheck className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div className="px-5 py-3 text-center text-xs text-slate-400 border-t border-slate-100">
+              共 {exportAuditMeta?.totalTasks || 0} 个任务，显示 {exportAuditLog.length} 个
             </div>
           </div>
         )}
@@ -920,6 +1032,94 @@ export default function ExportTasks() {
                 className="flex-1 bg-amber-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 确认处理
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {verifyResult && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-green-500" />
+                <h3 className="text-lg font-semibold text-slate-800">一致性校验结果</h3>
+              </div>
+              <button
+                onClick={() => setVerifyResult(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className={`p-4 rounded-lg ${verifyResult.consistent ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                <div className="flex items-center gap-2">
+                  {verifyResult.consistent ? (
+                    <CheckCircle className="w-5 h-5 text-green-600" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-red-600" />
+                  )}
+                  <span className={`font-medium ${verifyResult.consistent ? 'text-green-800' : 'text-red-800'}`}>
+                    {verifyResult.consistent ? '校验通过：API 记录与磁盘文件一致' : '校验未通过：存在不一致'}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-slate-500 text-xs">任务编号</div>
+                  <div className="font-mono text-slate-800">{verifyResult.taskNo}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500 text-xs">最终文件名</div>
+                  <div className="text-slate-800">{verifyResult.finalFileName || '(无)'}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500 text-xs">API 记录大小</div>
+                  <div className="text-slate-800">{formatFileSize(verifyResult.apiFileSize)}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500 text-xs">磁盘文件存在</div>
+                  <div className={verifyResult.diskExists ? 'text-green-600' : 'text-red-600'}>
+                    {verifyResult.diskExists ? '✓ 是' : '✗ 否'}
+                  </div>
+                </div>
+                {verifyResult.diskExists && (
+                  <>
+                    <div>
+                      <div className="text-slate-500 text-xs">磁盘文件大小</div>
+                      <div className="text-slate-800">{formatFileSize(verifyResult.diskFileSize)}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500 text-xs">大小匹配</div>
+                      <div className={verifyResult.sizeMatch ? 'text-green-600' : 'text-red-600'}>
+                        {verifyResult.sizeMatch ? '✓ 匹配' : '✗ 不匹配'}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+              {verifyResult.issues.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="text-sm font-medium text-red-700 mb-1">问题列表</div>
+                  {verifyResult.issues.map((issue, idx) => (
+                    <div key={idx} className="text-xs text-red-600">• {issue}</div>
+                  ))}
+                </div>
+              )}
+              {verifyResult.finalFilePath && (
+                <div className="text-xs text-slate-500 font-mono bg-slate-50 p-2 rounded break-all">
+                  {verifyResult.finalFilePath}
+                </div>
+              )}
+            </div>
+            <div className="p-5 border-t border-slate-200">
+              <button
+                onClick={() => setVerifyResult(null)}
+                className="w-full bg-slate-100 text-slate-700 rounded-lg py-2 text-sm font-medium hover:bg-slate-200 transition-colors"
+              >
+                关闭
               </button>
             </div>
           </div>

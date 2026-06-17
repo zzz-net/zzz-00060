@@ -7,7 +7,7 @@ const navItems = [
   { to: '/rules', label: '规则配置', icon: Settings },
   { to: '/review', label: '异常复核', icon: Shield },
   { to: '/report', label: '复核报告', icon: FileText },
-  { to: '/export-tasks', label: '导出任务台', icon: Download },
+  { to: '/export-tasks', label: '导出审计中心', icon: Download },
 ];
 
 export default function Layout() {

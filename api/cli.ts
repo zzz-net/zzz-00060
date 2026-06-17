@@ -53,7 +53,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 function printHelp() {
   console.log(`
-导出任务台 CLI
+导出审计中心 CLI
 
 用法:
   node --import tsx/esm api/cli.ts <command> [options]
@@ -66,6 +66,8 @@ function printHelp() {
   retry <taskId>             重试失败/取消的任务
   cancel <taskId>            取消排队/执行中的任务
   files [limit]              列出实际生成的导出文件
+  verify <taskId>            校验任务结果与磁盘文件一致性
+  audit [limit]              查看审计日志（含一致性校验摘要）
   help                       显示此帮助
 
 创建任务选项:
@@ -89,6 +91,9 @@ function printHelp() {
   node --import tsx/esm api/cli.ts cancel <task-uuid>
   node --import tsx/esm api/cli.ts files
   node --import tsx/esm api/cli.ts files 10
+  node --import tsx/esm api/cli.ts verify <task-uuid>
+  node --import tsx/esm api/cli.ts audit
+  node --import tsx/esm api/cli.ts audit 20
 `)
 }
 
@@ -299,6 +304,66 @@ async function cmdFiles(args: string[]) {
   console.log()
 }
 
+async function cmdVerify(args: string[]) {
+  const taskId = args[0]
+  if (!taskId) {
+    console.error('请提供任务 ID')
+    process.exit(1)
+  }
+  const { status: code, data } = await httpRequest('GET', `/api/export-tasks/${taskId}/verify`)
+  if (code !== 200 || !data?.success) {
+    console.error('校验失败:', data?.error || `HTTP ${code}`)
+    process.exit(1)
+  }
+  const r = data.data
+  console.log(`
+一致性校验结果
+═══════════════════════════════════════════
+  任务编号:     ${r.taskNo}
+  任务状态:     ${STATUS_LABELS[r.status] || r.status}
+  最终文件名:   ${r.finalFileName || '(无)'}
+  最终路径:     ${r.finalFilePath || '(无)'}
+  ───────────────────────────────────────────
+  API 文件大小: ${formatSize(r.apiFileSize)}
+  磁盘文件存在: ${r.diskExists ? '✓ 是' : '✗ 否'}
+  磁盘文件大小: ${r.diskExists ? formatSize(r.diskFileSize) : '(不存在)'}
+  大小匹配:     ${r.sizeMatch ? '✓ 是' : '✗ 否'}
+  ───────────────────────────────────────────
+  整体一致性:   ${r.consistent ? '✓ 一致' : '✗ 不一致'}
+${r.issues.length > 0 ? r.issues.map((i: string) => `  ⚠ ${i}`).join('\n') : ''}
+`)
+}
+
+async function cmdAudit(args: string[]) {
+  const limit = args[0] || '50'
+  const { status: code, data } = await httpRequest('GET', `/api/export-tasks/audit-log?limit=${limit}`)
+  if (code !== 200 || !data?.success) {
+    console.error('查询失败:', data?.error || `HTTP ${code}`)
+    process.exit(1)
+  }
+  const entries: any[] = data.data || []
+  const meta = data.meta || {}
+  if (entries.length === 0) {
+    console.log('暂无审计日志')
+    return
+  }
+  console.log(`\n审计日志 (共 ${meta.totalTasks} 个任务, 显示 ${meta.shown} 个)`)
+  console.log(`一致性摘要: ${meta.allConsistent ? '✓ 全部一致' : `⚠ ${meta.inconsistentCount} 个不一致`}\n`)
+  console.log('任务编号          状态     格式  文件名                    磁盘一致  操作人   完成时间')
+  console.log('────────────────  ───────  ────  ────────────────────────  ────────  ───────  ───────────────────')
+  for (const e of entries) {
+    const no = (e.taskNo || '').padEnd(16)
+    const st = (STATUS_LABELS[e.status] || e.status).padEnd(6)
+    const fmt = (e.format || '').toUpperCase().padEnd(4)
+    const name = (e.finalFileName || e.fileName || '').padEnd(24).slice(0, 24)
+    const consistent = e.diskConsistent === null ? '  N/A' : e.diskConsistent ? '  ✓' : '  ✗'
+    const op = (e.operator || '').padEnd(7)
+    const time = e.completedAt ? new Date(e.completedAt).toLocaleString() : ''
+    console.log(`${no}  ${st}  ${fmt}  ${name} ${consistent}   ${op}  ${time}`)
+  }
+  console.log()
+}
+
 async function main() {
   const args = process.argv.slice(2)
   const command = args[0] || 'help'
@@ -326,6 +391,12 @@ async function main() {
         break
       case 'files':
         await cmdFiles(rest)
+        break
+      case 'verify':
+        await cmdVerify(rest)
+        break
+      case 'audit':
+        await cmdAudit(rest)
         break
       case 'help':
       case '--help':

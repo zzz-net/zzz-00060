@@ -215,7 +215,7 @@ function writeExportFile(format: string, data: any[], finalPath: string): void {
   }
 }
 
-function executeTask(taskId: string): void {
+export function executeTask(taskId: string): void {
   const taskRow = db.prepare('SELECT * FROM export_tasks WHERE id = ?').get(taskId) as any
   if (!taskRow) return
 
@@ -315,6 +315,14 @@ function executeTask(taskId: string): void {
 
     const stat = fs.statSync(finalPath)
     logs = appendLog(logs, `文件写入成功, 大小=${stat.size} bytes`)
+
+    const diskExists = fs.existsSync(finalPath)
+    const diskSize = diskExists ? fs.statSync(finalPath).size : 0
+    if (diskExists && diskSize === stat.size) {
+      logs = appendLog(logs, `一致性校验通过: 磁盘文件存在且大小匹配 (${diskSize} bytes)`)
+    } else {
+      logs = appendLog(logs, `一致性校验警告: 磁盘文件${diskExists ? '存在但大小不匹配' : '不存在'} (预期=${stat.size}, 磁盘=${diskSize})`)
+    }
 
     const completedAt = new Date().toISOString()
     const duration = Date.now() - new Date(startedAt).getTime()
@@ -456,6 +464,68 @@ router.get('/', (req: Request, res: Response): void => {
     success: true,
     data: rows.map(parseRow),
     total,
+  })
+})
+
+router.get('/audit-log', (req: Request, res: Response): void => {
+  const limit = Math.min(parseInt((req.query.limit as string) || '50', 10), 200)
+
+  const rows = db.prepare(`
+    SELECT id, taskNo, status, format, exportDir, fileName, finalFileName, finalFilePath,
+      fileSize, recordCount, failureReason, operator, createdAt, completedAt, durationMs,
+      conflictAction, keyLogs
+    FROM export_tasks
+    ORDER BY createdAt DESC
+    LIMIT ?
+  `).all(limit) as any[]
+
+  const auditEntries = rows.map(r => {
+    let diskConsistent: boolean | null = null
+    let diskExists = false
+    if (r.status === 'success' && r.finalFilePath) {
+      diskExists = fs.existsSync(r.finalFilePath)
+      if (diskExists) {
+        const diskSize = fs.statSync(r.finalFilePath).size
+        diskConsistent = diskSize === (r.fileSize || 0)
+      } else {
+        diskConsistent = false
+      }
+    }
+
+    return {
+      taskId: r.id,
+      taskNo: r.taskNo,
+      status: r.status,
+      format: r.format,
+      exportDir: r.exportDir,
+      fileName: r.fileName,
+      finalFileName: r.finalFileName,
+      fileSize: r.fileSize,
+      recordCount: r.recordCount,
+      failureReason: r.failureReason,
+      operator: r.operator,
+      createdAt: r.createdAt,
+      completedAt: r.completedAt,
+      durationMs: r.durationMs,
+      conflictAction: r.conflictAction,
+      diskConsistent,
+      keyLogs: r.keyLogs ? JSON.parse(r.keyLogs) : [],
+    }
+  })
+
+  const total = (db.prepare('SELECT COUNT(*) as count FROM export_tasks').get() as any).count
+  const inconsistentCount = auditEntries.filter(e => e.diskConsistent === false).length
+
+  res.json({
+    success: true,
+    data: auditEntries,
+    total,
+    meta: {
+      totalTasks: total,
+      shown: auditEntries.length,
+      inconsistentCount,
+      allConsistent: inconsistentCount === 0,
+    },
   })
 })
 
@@ -723,6 +793,79 @@ router.post('/:id/change-dir-retry', (req: Request, res: Response): void => {
 
   const row = db.prepare('SELECT * FROM export_tasks WHERE id = ?').get(req.params.id) as any
   res.json({ success: true, data: parseRow(row) })
+})
+
+router.get('/:id/verify', (req: Request, res: Response): void => {
+  const taskRow = db.prepare('SELECT * FROM export_tasks WHERE id = ?').get(req.params.id) as any
+  if (!taskRow) {
+    res.status(404).json({ success: false, error: '任务不存在' })
+    return
+  }
+
+  const result: {
+    taskId: string
+    taskNo: string
+    status: string
+    finalFilePath: string
+    finalFileName: string
+    apiFileSize: number
+    apiRecordCount: number
+    diskExists: boolean
+    diskFileSize: number
+    sizeMatch: boolean
+    consistent: boolean
+    issues: string[]
+  } = {
+    taskId: taskRow.id,
+    taskNo: taskRow.taskNo,
+    status: taskRow.status,
+    finalFilePath: taskRow.finalFilePath || '',
+    finalFileName: taskRow.finalFileName || '',
+    apiFileSize: taskRow.fileSize || 0,
+    apiRecordCount: taskRow.recordCount || 0,
+    diskExists: false,
+    diskFileSize: 0,
+    sizeMatch: false,
+    consistent: true,
+    issues: [],
+  }
+
+  if (taskRow.status !== 'success') {
+    result.issues.push(`任务状态为 ${taskRow.status}，非成功状态`)
+    result.consistent = false
+    res.json({ success: true, data: result })
+    return
+  }
+
+  if (!taskRow.finalFilePath) {
+    result.issues.push('成功任务缺少 finalFilePath')
+    result.consistent = false
+    res.json({ success: true, data: result })
+    return
+  }
+
+  result.diskExists = fs.existsSync(taskRow.finalFilePath)
+  if (!result.diskExists) {
+    result.issues.push(`磁盘文件不存在: ${taskRow.finalFilePath}`)
+    result.consistent = false
+    res.json({ success: true, data: result })
+    return
+  }
+
+  const diskStat = fs.statSync(taskRow.finalFilePath)
+  result.diskFileSize = diskStat.size
+  result.sizeMatch = diskStat.size === (taskRow.fileSize || 0)
+  if (!result.sizeMatch) {
+    result.issues.push(`文件大小不一致: API=${taskRow.fileSize}, 磁盘=${diskStat.size}`)
+    result.consistent = false
+  }
+
+  if (taskRow.fileSize > 0 && diskStat.size === 0) {
+    result.issues.push('磁盘文件大小为 0，可能写入失败')
+    result.consistent = false
+  }
+
+  res.json({ success: true, data: result })
 })
 
 export default router

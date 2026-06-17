@@ -3,7 +3,8 @@ import type {
   Batch, Rule, Anomaly, ReportSummary, SelfCheckRecord,
   DrillSummary, DrillStep, ExportConflict, ExportConfig,
   DrillCompletionValidation, ExportTask, ExportTaskSummary,
-  CreateExportTaskRequest, ExportTaskFilterOptions, ExportTaskGeneratedFile
+  CreateExportTaskRequest, ExportTaskFilterOptions, ExportTaskGeneratedFile,
+  ExportTaskVerifyResult, ExportAuditLogEntry
 } from '@/shared/types';
 
 interface AnomalyFilters {
@@ -56,6 +57,8 @@ interface AppState {
   currentExportTask: ExportTask | null;
   exportFilterOptions: ExportTaskFilterOptions | null;
   exportGeneratedFiles: ExportTaskGeneratedFile[];
+  exportAuditLog: ExportAuditLogEntry[];
+  exportAuditMeta: { totalTasks: number; shown: number; inconsistentCount: number; allConsistent: boolean } | null;
 
   fetchBatches: () => Promise<void>;
   importBatch: (file: File) => Promise<void>;
@@ -130,6 +133,8 @@ interface AppState {
   preflightCheckConflict: (data: { exportDir: string; fileName: string }) => Promise<any>;
   fetchExportFilterOptions: () => Promise<ExportTaskFilterOptions>;
   fetchExportGeneratedFiles: (limit?: number) => Promise<ExportTaskGeneratedFile[]>;
+  verifyExportTask: (id: string) => Promise<ExportTaskVerifyResult>;
+  fetchExportAuditLog: (limit?: number) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -175,6 +180,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentExportTask: null,
   exportFilterOptions: null,
   exportGeneratedFiles: [],
+  exportAuditLog: [],
+  exportAuditMeta: null,
 
   fetchBatches: async () => {
     set({ batchesLoading: true });
@@ -734,6 +741,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       return [];
     } catch {
       return [];
+    }
+  },
+
+  verifyExportTask: async (id) => {
+    const res = await fetch(`/api/export-tasks/${id}/verify`);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '校验失败');
+    }
+    return json.data;
+  },
+
+  fetchExportAuditLog: async (limit) => {
+    try {
+      const query = limit ? `?limit=${limit}` : '';
+      const res = await fetch(`/api/export-tasks/audit-log${query}`);
+      const json = await res.json();
+      if (json.success) {
+        set({
+          exportAuditLog: json.data || [],
+          exportAuditMeta: json.meta || null,
+        });
+      }
+    } catch {
+      // ignore
     }
   },
 }));

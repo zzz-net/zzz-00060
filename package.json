@@ -12,7 +12,8 @@
     "server:dev": "nodemon",
     "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\"",
     "export:cli": "node --import tsx/esm api/cli.ts",
-    "test:export": "python test_export_tasks.py"
+    "test:export": "python test_export_tasks.py",
+    "test:audit": "python test_export_audit_center.py"
   },
   "dependencies": {
     "clsx": "^2.1.1",

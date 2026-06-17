@@ -321,3 +321,49 @@ export interface ExportTaskSummary {
   failed: number;
   cancelled: number;
 }
+
+export interface ExportTaskVerifyResult {
+  taskId: string;
+  taskNo: string;
+  status: string;
+  finalFilePath: string;
+  finalFileName: string;
+  apiFileSize: number;
+  apiRecordCount: number;
+  diskExists: boolean;
+  diskFileSize: number;
+  sizeMatch: boolean;
+  consistent: boolean;
+  issues: string[];
+}
+
+export interface ExportAuditLogEntry {
+  taskId: string;
+  taskNo: string;
+  status: string;
+  format: string;
+  exportDir: string;
+  fileName: string;
+  finalFileName: string;
+  fileSize: number;
+  recordCount: number;
+  failureReason: string;
+  operator: string;
+  createdAt: string;
+  completedAt: string;
+  durationMs: number;
+  conflictAction: string;
+  diskConsistent: boolean | null;
+  keyLogs: string[];
+}
+
+export interface ExportAuditLogResponse {
+  data: ExportAuditLogEntry[];
+  total: number;
+  meta: {
+    totalTasks: number;
+    shown: number;
+    inconsistentCount: number;
+    allConsistent: boolean;
+  };
+}
