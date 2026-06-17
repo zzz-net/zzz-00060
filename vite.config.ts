@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
 import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
+import fs from 'fs'
+import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -23,6 +25,20 @@ export default defineConfig({
       autoThemeTarget: '#root'
     }), 
     tsconfigPaths(),
+    {
+      name: 'serve-root-files',
+      configureServer(server) {
+        server.middlewares.use('/test-data.csv', (_req, res, next) => {
+          const filePath = path.join(process.cwd(), 'test-data.csv')
+          if (fs.existsSync(filePath)) {
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+            fs.createReadStream(filePath).pipe(res)
+          } else {
+            next()
+          }
+        })
+      },
+    },
   ],
   server: {
     proxy: {

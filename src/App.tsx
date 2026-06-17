@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
+import Checklist from './pages/Checklist';
 import BatchImport from './pages/BatchImport';
 import RuleConfig from './pages/RuleConfig';
 import AnomalyReview from './pages/AnomalyReview';
@@ -10,7 +11,8 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<BatchImport />} />
+          <Route path="/" element={<Checklist />} />
+          <Route path="/import" element={<BatchImport />} />
           <Route path="/rules" element={<RuleConfig />} />
           <Route path="/review" element={<AnomalyReview />} />
           <Route path="/report" element={<Report />} />

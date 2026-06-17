@@ -74,7 +74,7 @@ export interface Judgment {
   anomalyId: string;
   prevStatus: string;
   newStatus: string;
-  result: 'confirm' | 'false_positive' | 'reopen';
+  result: 'confirm' | 'false_positive' | 'reopen' | 'close';
   reason: string;
   note: string;
   operator: string;
@@ -91,4 +91,50 @@ export interface ReportSummary {
   closedCount: number;
   byType: Array<{ anomalyType: string; count: number }>;
   byBatch: Array<{ batchId: string; batchNo: string; count: number }>;
+}
+
+export interface CheckItem {
+  pass: boolean;
+  name: string;
+  message: string;
+  details?: string;
+}
+
+export interface SelfCheckRecord {
+  id: string;
+  status: 'pass' | 'fail' | 'running';
+  checkedAt: string;
+  durationMs: number;
+  configCheck: CheckItem;
+  apiCheck: CheckItem;
+  sampleFileCheck: CheckItem;
+  exportDirCheck: CheckItem;
+  failureSummary: string;
+  keyLogs: string[];
+}
+
+export interface DrillStep {
+  id: string;
+  name: string;
+  description: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startedAt?: string;
+  completedAt?: string;
+  result?: any;
+  error?: string;
+}
+
+export interface DrillSummary {
+  id: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  steps: DrillStep[];
+  importResult?: any;
+  judgeResult?: any;
+  closeReopenResult?: any;
+  exportResult?: any;
+  anomalyCount: number;
+  exportedFile: string;
+  operator: string;
 }

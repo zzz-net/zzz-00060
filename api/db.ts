@@ -112,6 +112,39 @@ INSERT OR IGNORE INTO rule_versions (id, ruleId, version, params) VALUES
   ('rv5', 'r5', 1, '{}');
 `)
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS self_check_records (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL CHECK(status IN ('pass', 'fail', 'running')),
+  checkedAt TEXT NOT NULL DEFAULT (datetime('now')),
+  durationMs INTEGER NOT NULL DEFAULT 0,
+  configCheck TEXT NOT NULL,
+  apiCheck TEXT NOT NULL,
+  sampleFileCheck TEXT NOT NULL,
+  exportDirCheck TEXT NOT NULL,
+  failureSummary TEXT DEFAULT '',
+  keyLogs TEXT DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS drill_summaries (
+  id TEXT PRIMARY KEY,
+  startedAt TEXT NOT NULL,
+  completedAt TEXT NOT NULL,
+  durationMs INTEGER NOT NULL,
+  steps TEXT NOT NULL,
+  importResult TEXT DEFAULT '',
+  judgeResult TEXT DEFAULT '',
+  closeReopenResult TEXT DEFAULT '',
+  exportResult TEXT DEFAULT '',
+  anomalyCount INTEGER NOT NULL DEFAULT 0,
+  exportedFile TEXT DEFAULT '',
+  operator TEXT DEFAULT '演练员'
+);
+
+CREATE INDEX IF NOT EXISTS idx_self_check_at ON self_check_records(checkedAt);
+CREATE INDEX IF NOT EXISTS idx_drill_at ON drill_summaries(completedAt);
+`)
+
 const cols = db.prepare("PRAGMA table_info(batches)").all() as any[]
 if (!cols.find(c => c.name === 'contentHash')) {
   db.exec("ALTER TABLE batches ADD COLUMN contentHash TEXT DEFAULT ''")

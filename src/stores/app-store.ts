@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Batch, Rule, Anomaly, ReportSummary } from '@/shared/types';
+import type { Batch, Rule, Anomaly, ReportSummary, SelfCheckRecord, DrillSummary, DrillStep } from '@/shared/types';
 
 interface AnomalyFilters {
   batchId: string;
@@ -29,6 +29,15 @@ interface AppState {
     anomaliesCreated: number;
   } | null;
 
+  selfCheckLatest: SelfCheckRecord | null;
+  selfCheckLoading: boolean;
+  selfCheckHistory: SelfCheckRecord[];
+
+  drillSummaries: DrillSummary[];
+  drillSummariesLoading: boolean;
+  currentDrillSteps: DrillStep[];
+  drillStartedAt: string | null;
+
   fetchBatches: () => Promise<void>;
   importBatch: (file: File) => Promise<void>;
   clearImportResult: () => void;
@@ -45,6 +54,24 @@ interface AppState {
   reopenAnomaly: (id: string) => Promise<void>;
 
   fetchSummary: () => Promise<void>;
+
+  fetchSelfCheckLatest: () => Promise<void>;
+  fetchSelfCheckHistory: () => Promise<void>;
+  runSelfCheck: () => Promise<SelfCheckRecord>;
+
+  fetchDrillSummaries: () => Promise<void>;
+  startDrill: () => void;
+  updateDrillStep: (stepId: string, updates: Partial<DrillStep>) => void;
+  completeDrill: (data: {
+    importResult?: any;
+    judgeResult?: any;
+    closeReopenResult?: any;
+    exportResult?: any;
+    anomalyCount: number;
+    exportedFile: string;
+    operator?: string;
+  }) => Promise<DrillSummary>;
+  clearCurrentDrill: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -67,6 +94,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   summaryLoading: false,
 
   importResult: null,
+
+  selfCheckLatest: null,
+  selfCheckLoading: false,
+  selfCheckHistory: [],
+
+  drillSummaries: [],
+  drillSummariesLoading: false,
+  currentDrillSteps: [],
+  drillStartedAt: null,
 
   fetchBatches: async () => {
     set({ batchesLoading: true });
@@ -241,5 +277,128 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch {
       set({ summaryLoading: false });
     }
+  },
+
+  fetchSelfCheckLatest: async () => {
+    set({ selfCheckLoading: true });
+    try {
+      const res = await fetch('/api/check/latest');
+      const json = await res.json();
+      set({ selfCheckLatest: json.data ?? null, selfCheckLoading: false });
+    } catch {
+      set({ selfCheckLoading: false });
+    }
+  },
+
+  fetchSelfCheckHistory: async () => {
+    try {
+      const res = await fetch('/api/check/history');
+      const json = await res.json();
+      set({ selfCheckHistory: json.data ?? [] });
+    } catch {
+      // ignore
+    }
+  },
+
+  runSelfCheck: async () => {
+    set({ selfCheckLoading: true });
+    const res = await fetch('/api/check/run', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      set({ selfCheckLoading: false });
+      throw new Error(err.error || '自检失败');
+    }
+    const json = await res.json();
+    set({ selfCheckLatest: json.data, selfCheckLoading: false });
+    return json.data;
+  },
+
+  fetchDrillSummaries: async () => {
+    set({ drillSummariesLoading: true });
+    try {
+      const res = await fetch('/api/drill/summaries');
+      const json = await res.json();
+      set({ drillSummaries: json.data ?? [], drillSummariesLoading: false });
+    } catch {
+      set({ drillSummariesLoading: false });
+    }
+  },
+
+  startDrill: () => {
+    const steps: DrillStep[] = [
+      {
+        id: 'import',
+        name: '样例导入',
+        description: '导入 test-data.csv 样例文件，验证异常检测',
+        status: 'pending',
+      },
+      {
+        id: 'judge',
+        name: '人工改判',
+        description: '对一个待复核异常进行改判操作',
+        status: 'pending',
+      },
+      {
+        id: 'close-reopen',
+        name: '关闭再重开',
+        description: '关闭已改判异常后重新打开，验证状态回滚',
+        status: 'pending',
+      },
+      {
+        id: 'export',
+        name: '导出报告',
+        description: '导出 CSV 和 JSON 格式的复核报告',
+        status: 'pending',
+      },
+    ];
+    set({
+      currentDrillSteps: steps,
+      drillStartedAt: new Date().toISOString(),
+    });
+  },
+
+  updateDrillStep: (stepId: string, updates: Partial<DrillStep>) => {
+    set((state) => ({
+      currentDrillSteps: state.currentDrillSteps.map((s) =>
+        s.id === stepId ? { ...s, ...updates } : s
+      ),
+    }));
+  },
+
+  completeDrill: async (data) => {
+    const { currentDrillSteps, drillStartedAt } = get();
+    const durationMs = drillStartedAt
+      ? Date.now() - new Date(drillStartedAt).getTime()
+      : 0;
+
+    const res = await fetch('/api/drill/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        startedAt: drillStartedAt,
+        durationMs,
+        steps: currentDrillSteps,
+        ...data,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '保存演练摘要失败');
+    }
+
+    const json = await res.json();
+    set({
+      drillStartedAt: null,
+    });
+    await get().fetchDrillSummaries();
+    return json.data;
+  },
+
+  clearCurrentDrill: () => {
+    set({
+      currentDrillSteps: [],
+      drillStartedAt: null,
+    });
   },
 }));
