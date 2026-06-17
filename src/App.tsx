@@ -5,6 +5,7 @@ import BatchImport from './pages/BatchImport';
 import RuleConfig from './pages/RuleConfig';
 import AnomalyReview from './pages/AnomalyReview';
 import Report from './pages/Report';
+import ExportTasks from './pages/ExportTasks';
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           <Route path="/rules" element={<RuleConfig />} />
           <Route path="/review" element={<AnomalyReview />} />
           <Route path="/report" element={<Report />} />
+          <Route path="/export-tasks" element={<ExportTasks />} />
         </Route>
       </Routes>
     </BrowserRouter>

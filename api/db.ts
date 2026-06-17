@@ -220,4 +220,32 @@ if (ectable && !ectable.sql.includes("'changeDir'")) {
   `)
 }
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS export_tasks (
+  id TEXT PRIMARY KEY,
+  taskNo TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('queued','running','success','failed','cancelled')),
+  format TEXT NOT NULL CHECK(format IN ('csv','json')),
+  exportDir TEXT NOT NULL,
+  fileName TEXT NOT NULL,
+  finalFileName TEXT DEFAULT '',
+  finalFilePath TEXT DEFAULT '',
+  fileSize INTEGER DEFAULT 0,
+  recordCount INTEGER DEFAULT 0,
+  conflictAction TEXT DEFAULT '',
+  conflictResolved INTEGER DEFAULT 0,
+  conflictInfo TEXT DEFAULT '',
+  failureReason TEXT DEFAULT '',
+  keyLogs TEXT DEFAULT '[]',
+  operator TEXT DEFAULT '导出员',
+  createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+  startedAt TEXT DEFAULT '',
+  completedAt TEXT DEFAULT '',
+  durationMs INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_export_tasks_status ON export_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_export_tasks_created ON export_tasks(createdAt);
+`)
+
 export default db

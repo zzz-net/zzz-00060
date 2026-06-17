@@ -233,3 +233,57 @@ export interface DrillSummary {
   completionValidation?: DrillCompletionValidation;
   status?: 'completed' | 'incomplete' | 'failed';
 }
+
+export type ExportTaskStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+
+export type ExportConflictAction = 'rename' | 'overwrite' | 'cancel' | 'changeDir' | '';
+
+export interface ExportTaskConflictInfo {
+  exists: boolean;
+  filePath: string;
+  fileName: string;
+  fileSize?: number;
+  modifiedAt?: string;
+  suggestedName?: string;
+}
+
+export interface ExportTask {
+  id: string;
+  taskNo: string;
+  status: ExportTaskStatus;
+  format: 'csv' | 'json';
+  exportDir: string;
+  fileName: string;
+  finalFileName: string;
+  finalFilePath: string;
+  fileSize: number;
+  recordCount: number;
+  conflictAction: ExportConflictAction;
+  conflictResolved: boolean;
+  conflictInfo: ExportTaskConflictInfo | null;
+  failureReason: string;
+  keyLogs: string[];
+  operator: string;
+  createdAt: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+}
+
+export interface CreateExportTaskRequest {
+  format: 'csv' | 'json';
+  exportDir: string;
+  fileName: string;
+  conflictAction?: ExportConflictAction;
+  newFileName?: string;
+  operator?: string;
+}
+
+export interface ExportTaskSummary {
+  total: number;
+  queued: number;
+  running: number;
+  success: number;
+  failed: number;
+  cancelled: number;
+}

@@ -13,6 +13,7 @@ import anomalyRoutes from './routes/anomalies.js'
 import reportRoutes from './routes/report.js'
 import checkRoutes from './routes/check.js'
 import drillRoutes from './routes/drill.js'
+import exportTaskRoutes from './routes/export-tasks.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -31,6 +32,7 @@ app.use('/api/anomalies', anomalyRoutes)
 app.use('/api/report', reportRoutes)
 app.use('/api/check', checkRoutes)
 app.use('/api/drill', drillRoutes)
+app.use('/api/export-tasks', exportTaskRoutes)
 
 app.use(
   '/api/health',

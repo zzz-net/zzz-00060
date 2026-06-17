@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import type {
   Batch, Rule, Anomaly, ReportSummary, SelfCheckRecord,
   DrillSummary, DrillStep, ExportConflict, ExportConfig,
-  DrillCompletionValidation
+  DrillCompletionValidation, ExportTask, ExportTaskSummary,
+  CreateExportTaskRequest
 } from '@/shared/types';
 
 interface AnomalyFilters {
@@ -47,6 +48,12 @@ interface AppState {
   exportConflictLoading: boolean;
   exportConfigs: ExportConfig[];
   currentExportConfig: ExportConfig | null;
+
+  exportTasks: ExportTask[];
+  exportTasksLoading: boolean;
+  exportTasksTotal: number;
+  exportTaskSummary: ExportTaskSummary | null;
+  currentExportTask: ExportTask | null;
 
   fetchBatches: () => Promise<void>;
   importBatch: (file: File) => Promise<void>;
@@ -105,6 +112,20 @@ interface AppState {
     conflictAction?: 'rename' | 'overwrite' | 'cancel';
     customFileName?: string;
   }) => Promise<any>;
+
+  fetchExportTaskSummary: () => Promise<void>;
+  fetchExportTasks: (params?: { status?: string; limit?: number; offset?: number }) => Promise<void>;
+  fetchExportTask: (id: string) => Promise<ExportTask>;
+  createExportTask: (data: CreateExportTaskRequest) => Promise<ExportTask>;
+  resolveExportTaskConflict: (id: string, data: {
+    conflictAction: 'rename' | 'overwrite' | 'cancel' | 'changeDir';
+    newFileName?: string;
+    exportDir?: string;
+  }) => Promise<ExportTask>;
+  retryExportTask: (id: string) => Promise<ExportTask>;
+  cancelExportTask: (id: string) => Promise<ExportTask>;
+  changeDirRetryExportTask: (id: string, exportDir: string) => Promise<ExportTask>;
+  preflightCheckConflict: (data: { exportDir: string; fileName: string }) => Promise<any>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -142,6 +163,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   exportConflictLoading: false,
   exportConfigs: [],
   currentExportConfig: null,
+
+  exportTasks: [],
+  exportTasksLoading: false,
+  exportTasksTotal: 0,
+  exportTaskSummary: null,
+  currentExportTask: null,
 
   fetchBatches: async () => {
     set({ batchesLoading: true });
@@ -554,5 +581,124 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     return json.data;
+  },
+
+  fetchExportTaskSummary: async () => {
+    try {
+      const res = await fetch('/api/export-tasks/summary');
+      const json = await res.json();
+      set({ exportTaskSummary: json.data ?? null });
+    } catch {
+      // ignore
+    }
+  },
+
+  fetchExportTasks: async (params) => {
+    set({ exportTasksLoading: true });
+    try {
+      const query = new URLSearchParams();
+      if (params?.status) query.set('status', params.status);
+      if (params?.limit) query.set('limit', String(params.limit));
+      if (params?.offset) query.set('offset', String(params.offset));
+      const res = await fetch(`/api/export-tasks?${query.toString()}`);
+      const json = await res.json();
+      set({
+        exportTasks: json.data ?? [],
+        exportTasksTotal: json.total ?? 0,
+        exportTasksLoading: false,
+      });
+    } catch {
+      set({ exportTasksLoading: false });
+    }
+  },
+
+  fetchExportTask: async (id) => {
+    const res = await fetch(`/api/export-tasks/${id}`);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '获取任务详情失败');
+    }
+    set({ currentExportTask: json.data });
+    return json.data;
+  },
+
+  createExportTask: async (data) => {
+    const res = await fetch('/api/export-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '创建导出任务失败');
+    }
+    await get().fetchExportTasks();
+    await get().fetchExportTaskSummary();
+    return json.data;
+  },
+
+  resolveExportTaskConflict: async (id, data) => {
+    const res = await fetch(`/api/export-tasks/${id}/resolve-conflict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '处理冲突失败');
+    }
+    await get().fetchExportTasks();
+    await get().fetchExportTaskSummary();
+    return json.data;
+  },
+
+  retryExportTask: async (id) => {
+    const res = await fetch(`/api/export-tasks/${id}/retry`, {
+      method: 'POST',
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '重试任务失败');
+    }
+    await get().fetchExportTasks();
+    await get().fetchExportTaskSummary();
+    return json.data;
+  },
+
+  cancelExportTask: async (id) => {
+    const res = await fetch(`/api/export-tasks/${id}/cancel`, {
+      method: 'POST',
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '取消任务失败');
+    }
+    await get().fetchExportTasks();
+    await get().fetchExportTaskSummary();
+    return json.data;
+  },
+
+  changeDirRetryExportTask: async (id, exportDir) => {
+    const res = await fetch(`/api/export-tasks/${id}/change-dir-retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exportDir }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || '切换目录重试失败');
+    }
+    await get().fetchExportTasks();
+    await get().fetchExportTaskSummary();
+    return json.data;
+  },
+
+  preflightCheckConflict: async (data) => {
+    const query = new URLSearchParams();
+    query.set('exportDir', data.exportDir);
+    query.set('fileName', data.fileName);
+    const res = await fetch(`/api/export-tasks/check-conflict/preflight?${query.toString()}`);
+    const json = await res.json();
+    return json;
   },
 }));

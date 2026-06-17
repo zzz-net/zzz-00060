@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Upload, Settings, Shield, FileText, Zap, ClipboardCheck } from 'lucide-react';
+import { Upload, Settings, Shield, FileText, Zap, ClipboardCheck, Download } from 'lucide-react';
 
 const navItems = [
   { to: '/', label: '交付自检', icon: ClipboardCheck },
@@ -7,6 +7,7 @@ const navItems = [
   { to: '/rules', label: '规则配置', icon: Settings },
   { to: '/review', label: '异常复核', icon: Shield },
   { to: '/report', label: '复核报告', icon: FileText },
+  { to: '/export-tasks', label: '导出任务台', icon: Download },
 ];
 
 export default function Layout() {
