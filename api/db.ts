@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS judgments (
   anomalyId TEXT NOT NULL REFERENCES anomalies(id),
   prevStatus TEXT NOT NULL,
   newStatus TEXT NOT NULL,
-  result TEXT NOT NULL CHECK(result IN ('confirm','false_positive','reopen')),
+  result TEXT NOT NULL CHECK(result IN ('confirm','false_positive','reopen','close')),
   reason TEXT DEFAULT '',
   note TEXT DEFAULT '',
   operator TEXT DEFAULT '复核员',
@@ -123,6 +123,31 @@ if (!jcols.find(c => c.name === 'prevRuleId')) {
 }
 if (!jcols.find(c => c.name === 'newRuleId')) {
   db.exec("ALTER TABLE judgments ADD COLUMN newRuleId TEXT DEFAULT ''")
+}
+
+const jtable = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'judgments'").get() as any
+if (jtable && !jtable.sql.includes("'close'")) {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE judgments_new (
+      id TEXT PRIMARY KEY,
+      anomalyId TEXT NOT NULL REFERENCES anomalies(id),
+      prevStatus TEXT NOT NULL,
+      newStatus TEXT NOT NULL,
+      result TEXT NOT NULL CHECK(result IN ('confirm','false_positive','reopen','close')),
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      operator TEXT DEFAULT '复核员',
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      prevRuleId TEXT DEFAULT '',
+      newRuleId TEXT DEFAULT ''
+    );
+    INSERT INTO judgments_new SELECT * FROM judgments;
+    DROP TABLE judgments;
+    ALTER TABLE judgments_new RENAME TO judgments;
+    CREATE INDEX IF NOT EXISTS idx_judgments_anomaly ON judgments(anomalyId);
+    PRAGMA foreign_keys = ON;
+  `)
 }
 
 export default db

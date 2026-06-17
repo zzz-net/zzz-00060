@@ -258,7 +258,7 @@ export default function AnomalyReview() {
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-500 whitespace-pre-line max-w-[240px]">
                         {a.latestJudgment
-                          ? `${a.latestJudgment.result === 'confirm' ? '确认异常' : a.latestJudgment.result === 'false_positive' ? '误报' : a.latestJudgment.result === 'reopen' ? '重开' : a.latestJudgment.result}${a.latestJudgment.reason ? `\n原因：${a.latestJudgment.reason}` : ''}${a.latestJudgment.note ? `\n备注：${a.latestJudgment.note}` : ''}`
+                          ? `${a.latestJudgment.result === 'confirm' ? '确认异常' : a.latestJudgment.result === 'false_positive' ? '误报' : a.latestJudgment.result === 'close' ? '关闭' : a.latestJudgment.result === 'reopen' ? '重开' : a.latestJudgment.result}${a.latestJudgment.reason ? `\n原因：${a.latestJudgment.reason}` : ''}${a.latestJudgment.note ? `\n备注：${a.latestJudgment.note}` : ''}`
                           : '-'}
                       </td>
                       <td className="px-4 py-3">

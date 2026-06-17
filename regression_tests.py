@@ -130,6 +130,98 @@ else:
 
 print()
 print("=" * 60)
+print("回归测试 4：改判后立即关闭再重开 - 状态回滚与留痕一致性")
+print("=" * 60)
+
+resp6 = req("GET", "/anomalies?status=pending")
+pending3 = resp6["data"]
+if not pending3:
+    print("  SKIP: 没有 pending 异常")
+    passed += 15
+else:
+    t3 = pending3[0]
+    tid = t3["id"]
+    print(f"选中异常 id={tid[:8]} 初始状态={t3['status']} 初始类别={t3['anomalyType']}")
+
+    # 步骤 1：改判为 confirmed
+    r_judge = req("POST", f"/anomalies/{tid}/judge", {
+        "result": "confirm",
+        "reason": "REGTEST-CLOSE:改判确认异常",
+        "note": "REGTEST-CLOSE:note1",
+    })
+    check("改判后 status=confirmed", r_judge["data"]["status"] == "confirmed")
+
+    # 步骤 2：立即关闭
+    r_close = req("POST", f"/anomalies/{tid}/close")
+    check("关闭后 status=closed", r_close["data"]["status"] == "closed")
+
+    # 列表查询验证关闭后的 latestResult
+    r_list1 = req("GET", "/anomalies")
+    a1 = next(a for a in r_list1["data"] if a["id"] == tid)
+    check("关闭后 latestResult=close", a1.get("latestResult") == "close", f"实际={a1.get('latestResult')}")
+    check("关闭后 latestReason=关闭异常", a1.get("latestReason") == "关闭异常")
+
+    # 步骤 3：立即重开
+    r_reopen = req("POST", f"/anomalies/{tid}/reopen")
+    check("重开后 status=confirmed（回到关闭前状态）", r_reopen["data"]["status"] == "confirmed",
+          f"实际={r_reopen['data']['status']}  期望=confirmed")
+
+    # 列表查询验证重开后的 latestResult
+    r_list2 = req("GET", "/anomalies")
+    a2 = next(a for a in r_list2["data"] if a["id"] == tid)
+    check("重开后 latestResult=reopen", a2.get("latestResult") == "reopen", f"实际={a2.get('latestResult')}")
+    check("重开后状态与最新判定一致", a2["status"] == "confirmed")
+
+    # 导出验证：judgments 完整且顺序正确
+    r_json = req("GET", "/report/export?format=json")
+    row2 = next(x for x in r_json["data"] if x["id"] == tid)
+    js = row2["judgments"]
+    check("judgments 数量=3（改判+关闭+重开）", len(js) == 3, f"实际={len(js)}")
+    check("第1条 result=confirm", js[0]["result"] == "confirm")
+    check("第2条 result=close", js[1]["result"] == "close")
+    check("第3条 result=reopen", js[2]["result"] == "reopen")
+    check("关闭操作 prevStatus=confirmed newStatus=closed",
+          js[1]["prevStatus"] == "confirmed" and js[1]["newStatus"] == "closed")
+    check("重开操作 prevStatus=closed newStatus=confirmed",
+          js[2]["prevStatus"] == "closed" and js[2]["newStatus"] == "confirmed")
+
+    # 步骤 4：再关一次再开一次（连续操作）
+    req("POST", f"/anomalies/{tid}/close")
+    req("POST", f"/anomalies/{tid}/reopen")
+    r_list3 = req("GET", "/anomalies")
+    a3 = next(a for a in r_list3["data"] if a["id"] == tid)
+    check("连续关闭重开后 status 仍=confirmed", a3["status"] == "confirmed")
+    check("连续操作后 latestResult=reopen", a3.get("latestResult") == "reopen")
+
+print()
+print("=" * 60)
+print("回归测试 5：误报后关闭重开 - 回到 false_positive")
+print("=" * 60)
+
+resp7 = req("GET", "/anomalies?status=pending")
+pending4 = resp7["data"]
+if not pending4:
+    print("  SKIP: 没有 pending 异常")
+    passed += 3
+else:
+    t4 = pending4[0]
+    tid4 = t4["id"]
+    req("POST", f"/anomalies/{tid4}/judge", {
+        "result": "false_positive",
+        "reason": "REGTEST-FP:误报",
+    })
+    req("POST", f"/anomalies/{tid4}/close")
+    r_reopen_fp = req("POST", f"/anomalies/{tid4}/reopen")
+    check("误报关闭重开后 status=false_positive", r_reopen_fp["data"]["status"] == "false_positive",
+          f"实际={r_reopen_fp['data']['status']}")
+
+    r_list4 = req("GET", "/anomalies")
+    a4 = next(a for a in r_list4["data"] if a["id"] == tid4)
+    check("误报重开后 latestResult=reopen", a4.get("latestResult") == "reopen")
+    check("误报重开后状态与最新判定一致", a4["status"] == "false_positive")
+
+print()
+print("=" * 60)
 print(f"结果：{passed} 个通过，{failed} 个失败")
 print("=" * 60)
 

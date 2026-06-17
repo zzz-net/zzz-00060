@@ -53,7 +53,7 @@ router.get('/export', (req: Request, res: Response): void => {
     ? db.prepare(`
         SELECT j.* FROM judgments j
         WHERE j.anomalyId IN (${anomalyIds.map(() => '?').join(',')})
-        ORDER BY j.createdAt
+        ORDER BY j.rowid
       `).all(...anomalyIds) as any[]
     : []
 

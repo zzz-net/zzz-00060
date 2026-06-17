@@ -16,7 +16,7 @@ router.get('/', (req: Request, res: Response): void => {
     LEFT JOIN readings r ON r.id = a.readingId
     LEFT JOIN rules ru ON ru.id = a.ruleId
     LEFT JOIN judgments j ON j.id = (
-      SELECT j2.id FROM judgments j2 WHERE j2.anomalyId = a.id ORDER BY j2.createdAt DESC LIMIT 1
+      SELECT j2.id FROM judgments j2 WHERE j2.anomalyId = a.id ORDER BY j2.rowid DESC LIMIT 1
     )
     WHERE 1=1
   `
@@ -128,7 +128,7 @@ router.post('/:id/close', (req: Request, res: Response): void => {
   db.transaction(() => {
     db.prepare(`
       INSERT INTO judgments (id, anomalyId, prevStatus, newStatus, result, reason, note, prevRuleId, newRuleId)
-      VALUES (?, ?, ?, 'closed', 'confirm', ?, ?, '', '')
+      VALUES (?, ?, ?, 'closed', 'close', ?, ?, '', '')
     `).run(uuidv4(), anomaly.id, prevStatus, '关闭异常', '')
 
     db.prepare('UPDATE anomalies SET status = ? WHERE id = ?').run('closed', anomaly.id)
@@ -157,7 +157,7 @@ router.post('/:id/reopen', (req: Request, res: Response): void => {
   }
 
   const lastJudgment = db.prepare(
-    'SELECT * FROM judgments WHERE anomalyId = ? ORDER BY createdAt DESC LIMIT 1'
+    'SELECT * FROM judgments WHERE anomalyId = ? ORDER BY rowid DESC LIMIT 1'
   ).get(anomaly.id) as any
 
   const targetStatus = lastJudgment ? lastJudgment.prevStatus : 'pending'
