@@ -25,6 +25,7 @@ interface CheckResultItem {
   conflictInfo?: {
     exists: boolean
     files: ConflictFile[]
+    exportDir?: string
     suggestedAction?: string
   }
 }
@@ -125,17 +126,34 @@ function checkSampleFile(): CheckResultItem {
   }
 }
 
-function checkExportDir(resolvedConflicts?: string[]): CheckResultItem {
+function checkExportDir(resolvedConflicts?: string[], customExportDir?: string): CheckResultItem {
   try {
-    const exportDir = path.resolve(__dirname, '..', '..')
-    const writable = fs.accessSync ? (() => {
+    const exportDir = customExportDir ? path.resolve(customExportDir) : path.resolve(__dirname, '..', '..')
+
+    if (!fs.existsSync(exportDir)) {
       try {
-        fs.accessSync(exportDir, fs.constants.W_OK)
-        return true
-      } catch {
-        return false
+        fs.mkdirSync(exportDir, { recursive: true })
+      } catch (e: unknown) {
+        return {
+          pass: false,
+          name: '导出目录检查',
+          message: '导出目录不存在且无法创建',
+          details: `目录不存在且无法创建: ${exportDir}。${e instanceof Error ? e.message : String(e)}。请检查目录路径或权限。`,
+          conflictInfo: {
+            exists: false,
+            files: [],
+            suggestedAction: '请指定一个有效的目录路径，或检查父目录权限。',
+          },
+        }
       }
-    })() : true
+    }
+
+    let writable = true
+    try {
+      fs.accessSync(exportDir, fs.constants.W_OK)
+    } catch {
+      writable = false
+    }
 
     const testFile = path.join(exportDir, `.export_test_${Date.now()}.tmp`)
     try {
@@ -149,6 +167,25 @@ function checkExportDir(resolvedConflicts?: string[]): CheckResultItem {
         name: '导出目录检查',
         message: '导出目录不可写',
         details: `无法写入: ${exportDir}。请检查目录权限或更换导出目录。`,
+        conflictInfo: {
+          exists: false,
+          files: [],
+          suggestedAction: '请选择一个可写的目录，或修改当前目录的权限后重试。',
+        },
+      }
+    }
+
+    if (!writable) {
+      return {
+        pass: false,
+        name: '导出目录检查',
+        message: '导出目录不可写',
+        details: `目录不可写: ${exportDir}。请检查目录权限。`,
+        conflictInfo: {
+          exists: false,
+          files: [],
+          suggestedAction: '请选择一个可写的目录，或修改当前目录的权限后重试。',
+        },
       }
     }
 
@@ -179,11 +216,12 @@ function checkExportDir(resolvedConflicts?: string[]): CheckResultItem {
         ? `目录不可写: ${exportDir}。请检查目录权限。`
         : hasConflicts
           ? `存在重名冲突文件: ${conflictFiles.map(c => c.name).join(', ')}。请处理冲突后重试：改名、覆盖或切换目录。`
-          : '可写，无重名冲突',
+          : `可写，无重名冲突。导出目录: ${exportDir}`,
       conflictInfo: {
         exists: hasConflicts,
         files: conflictFiles,
-        suggestedAction: hasConflicts ? '请选择冲突处理方式：rename（自动重命名）、overwrite（覆盖）、或切换导出目录' : undefined,
+        exportDir,
+        suggestedAction: hasConflicts ? '请选择冲突处理方式：rename（自动重命名）、overwrite（覆盖）、changeDir（切换导出目录）' : undefined,
       },
     }
   } catch (e: unknown) {
@@ -355,22 +393,46 @@ router.get('/export/conflict', (req: Request, res: Response): void => {
   res.json({ success: true, data: conflictInfo })
 })
 
-router.post('/export/resolve-conflict', (req: Request, res: Response): void => {
-  const { fileName, action, newFileName, exportDir: customExportDir } = req.body
+router.post('/export/resolve-conflict', async (req: Request, res: Response): Promise<void> => {
+  const { fileName, action, newFileName, exportDir: customExportDir, performExport = true } = req.body
 
   if (!fileName || !action) {
     res.status(400).json({ success: false, error: '缺少必要参数: fileName 和 action' })
     return
   }
 
-  if (!['rename', 'overwrite', 'cancel'].includes(action)) {
-    res.status(400).json({ success: false, error: '无效的 action，必须是 rename、overwrite 或 cancel' })
+  if (!['rename', 'overwrite', 'cancel', 'changeDir'].includes(action)) {
+    res.status(400).json({ success: false, error: '无效的 action，必须是 rename、overwrite、changeDir 或 cancel' })
     return
   }
 
   const exportDir = customExportDir ? path.resolve(customExportDir) : path.resolve(__dirname, '..', '..')
 
+  if (action === 'changeDir' && !customExportDir) {
+    res.status(400).json({
+      success: false,
+      error: '切换目录时必须提供 exportDir 参数',
+      blockedStep: '导出报告',
+      retrySuggestion: '请指定一个有效的导出目录路径。',
+    })
+    return
+  }
+
   if (action !== 'cancel') {
+    try {
+      if (!fs.existsSync(exportDir)) {
+        fs.mkdirSync(exportDir, { recursive: true })
+      }
+    } catch (e: unknown) {
+      res.status(400).json({
+        success: false,
+        error: `导出目录不存在且无法创建: ${exportDir}。${e instanceof Error ? e.message : String(e)}`,
+        blockedStep: '导出报告',
+        retrySuggestion: '请选择一个有效的目录路径，或检查目录权限。',
+      })
+      return
+    }
+
     try {
       fs.accessSync(exportDir, fs.constants.W_OK)
     } catch {
@@ -382,16 +444,34 @@ router.post('/export/resolve-conflict', (req: Request, res: Response): void => {
       })
       return
     }
+
+    const testFile = path.join(exportDir, `.write_test_${Date.now()}.tmp`)
+    try {
+      fs.writeFileSync(testFile, 'test')
+      if (fs.existsSync(testFile)) {
+        fs.unlinkSync(testFile)
+      }
+    } catch {
+      res.status(400).json({
+        success: false,
+        error: `导出目录写入测试失败: ${exportDir}。目录可能不可写。`,
+        blockedStep: '导出报告',
+        retrySuggestion: '请选择一个可写的目录，或检查目录权限后重试。',
+      })
+      return
+    }
   }
 
   const filePath = path.join(exportDir, fileName)
   const exists = fs.existsSync(filePath)
+  const format = fileName.endsWith('.json') ? 'json' : 'csv'
 
   let resolution: any = {
     action,
     fileName,
     exportDir,
     originalFilePath: filePath,
+    originalFileExists: exists,
     resolvedAt: new Date().toISOString(),
     success: true,
   }
@@ -400,14 +480,57 @@ router.post('/export/resolve-conflict', (req: Request, res: Response): void => {
     resolution.success = false
     resolution.failureReason = '用户取消导出'
     resolution.retrySuggestion = '如需继续导出，请重新选择导出方式。'
-  } else if (action === 'rename') {
-    const finalName = newFileName || generateUniqueFileName(exportDir, fileName)
+  } else {
+    let finalName = fileName
+    if (action === 'rename' || action === 'changeDir') {
+      finalName = newFileName || generateUniqueFileName(action === 'changeDir' ? exportDir : path.resolve(__dirname, '..', '..'), fileName)
+    }
     resolution.newFileName = finalName
     resolution.finalFilePath = path.join(exportDir, finalName)
-    resolution.failureReason = exists ? `原文件 ${fileName} 已存在，已自动重命名为 ${finalName}` : `使用指定文件名 ${finalName}`
-  } else if (action === 'overwrite') {
-    resolution.finalFilePath = filePath
-    resolution.failureReason = exists ? `将覆盖已存在的文件 ${fileName}` : `文件 ${fileName} 不存在，将新建`
+
+    if (action === 'rename') {
+      resolution.failureReason = exists ? `原文件 ${fileName} 已存在，将自动重命名为 ${finalName}` : `使用指定文件名 ${finalName}`
+    } else if (action === 'overwrite') {
+      resolution.failureReason = exists ? `将覆盖已存在的文件 ${fileName}` : `文件 ${fileName} 不存在，将新建`
+    } else if (action === 'changeDir') {
+      resolution.failureReason = `切换到新目录: ${exportDir}，文件名为 ${finalName}`
+    }
+
+    if (performExport) {
+      try {
+        const exportRes = await fetch(`http://127.0.0.1:${process.env.PORT || 3001}/api/report/export-to-file`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            format,
+            fileName: finalName,
+            exportDir,
+            conflictAction: action === 'changeDir' ? 'rename' : action,
+            customFileName: finalName,
+          }),
+        })
+
+        const exportData = await exportRes.json()
+
+        if (!exportRes.ok || !exportData.success) {
+          resolution.success = false
+          resolution.failureReason = exportData.error || '导出执行失败'
+          resolution.retrySuggestion = '请检查导出配置后重试。'
+          resolution.exportError = exportData.error
+        } else {
+          resolution.exportResult = exportData.data
+          resolution.finalFilePath = exportData.data.filePath
+          resolution.newFileName = exportData.data.fileName
+          resolution.exportedAt = exportData.data.exportedAt
+          resolution.fileSize = exportData.data.fileSize
+          resolution.recordCount = exportData.data.recordCount
+        }
+      } catch (e: unknown) {
+        resolution.success = false
+        resolution.failureReason = `导出执行异常: ${e instanceof Error ? e.message : String(e)}`
+        resolution.retrySuggestion = '请检查服务是否正常运行后重试。'
+      }
+    }
   }
 
   const latest = db.prepare(`
@@ -433,7 +556,7 @@ router.post('/export/resolve-conflict', (req: Request, res: Response): void => {
     configId,
     exportDir,
     resolution.newFileName || fileName,
-    fileName.endsWith('.json') ? 'json' : 'csv',
+    format,
     action,
     resolution.newFileName || '',
   )

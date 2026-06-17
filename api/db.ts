@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS export_configs (
   exportDir TEXT NOT NULL,
   fileName TEXT NOT NULL,
   format TEXT NOT NULL CHECK(format IN ('csv', 'json')),
-  conflictAction TEXT CHECK(conflictAction IN ('rename', 'overwrite', 'cancel')),
+  conflictAction TEXT CHECK(conflictAction IN ('rename', 'overwrite', 'cancel', 'changeDir')),
   newFileName TEXT DEFAULT '',
   createdAt TEXT NOT NULL DEFAULT (datetime('now')),
   updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
@@ -195,6 +195,27 @@ if (jtable && !jtable.sql.includes("'close'")) {
     DROP TABLE judgments;
     ALTER TABLE judgments_new RENAME TO judgments;
     CREATE INDEX IF NOT EXISTS idx_judgments_anomaly ON judgments(anomalyId);
+    PRAGMA foreign_keys = ON;
+  `)
+}
+
+const ectable = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'export_configs'").get() as any
+if (ectable && !ectable.sql.includes("'changeDir'")) {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE export_configs_new (
+      id TEXT PRIMARY KEY,
+      exportDir TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      format TEXT NOT NULL CHECK(format IN ('csv', 'json')),
+      conflictAction TEXT CHECK(conflictAction IN ('rename', 'overwrite', 'cancel', 'changeDir')),
+      newFileName TEXT DEFAULT '',
+      createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+      updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO export_configs_new SELECT * FROM export_configs;
+    DROP TABLE export_configs;
+    ALTER TABLE export_configs_new RENAME TO export_configs;
     PRAGMA foreign_keys = ON;
   `)
 }

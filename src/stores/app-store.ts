@@ -87,9 +87,10 @@ interface AppState {
   checkExportConflict: (fileName: string) => Promise<ExportConflict>;
   resolveExportConflict: (data: {
     fileName: string;
-    action: 'rename' | 'overwrite' | 'cancel';
+    action: 'rename' | 'overwrite' | 'cancel' | 'changeDir';
     newFileName?: string;
     exportDir?: string;
+    performExport?: boolean;
   }) => Promise<any>;
   fetchExportConfigs: () => Promise<void>;
   saveExportConfig: (data: {
@@ -97,6 +98,13 @@ interface AppState {
     fileName: string;
     format: 'csv' | 'json';
   }) => Promise<ExportConfig>;
+  exportReportToFile: (data: {
+    format: 'csv' | 'json';
+    fileName?: string;
+    exportDir?: string;
+    conflictAction?: 'rename' | 'overwrite' | 'cancel';
+    customFileName?: string;
+  }) => Promise<any>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -526,6 +534,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     const json = await res.json();
     set({ currentExportConfig: json.data });
     await get().fetchExportConfigs();
+    return json.data;
+  },
+
+  exportReportToFile: async (data) => {
+    const res = await fetch('/api/report/export-to-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    const json = await res.json();
+
+    if (!res.ok || !json.success) {
+      const error = new Error(json.error || '导出失败');
+      (error as any).blockedStep = json.blockedStep;
+      (error as any).retrySuggestion = json.retrySuggestion;
+      throw error;
+    }
+
     return json.data;
   },
 }));

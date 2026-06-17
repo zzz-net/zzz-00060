@@ -10,7 +10,7 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-BASE = "http://127.0.0.1:3001/api"
+BASE = "http://127.0.0.1:3002/api"
 
 def req(method, path, body=None, headers=None, files=None):
     h = {}
@@ -74,6 +74,11 @@ def cleanup_test_files():
     for f in os.listdir(export_dir):
         if f.startswith("drill_report_") and (f.endswith(".csv") or f.endswith(".json")):
             fp = os.path.join(export_dir, f)
+            os.remove(fp)
+            print(f"  已清理: {fp}")
+    for f in ["report.csv", "report.json", "anomalies_export.csv", "test_export_direct.json"]:
+        fp = os.path.join(export_dir, f)
+        if os.path.exists(fp):
             os.remove(fp)
             print(f"  已清理: {fp}")
 
@@ -508,7 +513,261 @@ try:
 except Exception as e:
     check("重启后状态持久化", False, f"错误: {e}")
 
-print_section("测试 13: 前端类型检查")
+print_section("测试 13: 服务端导出落盘 - 改名后文件真实存在")
+try:
+    print("  先创建冲突文件...")
+    with open(test_conflict_file, "w", encoding="utf-8") as f:
+        f.write("old,data\n1,2\n")
+    
+    print("  使用 rename 方式处理冲突并执行导出...")
+    resolution = req("POST", "/check/export/resolve-conflict", {
+        "fileName": "drill_report.csv",
+        "action": "rename",
+        "performExport": True
+    })
+    
+    check("冲突处理请求成功", resolution.get("success") == True)
+    data = resolution.get("data", {})
+    
+    check("处理方式为 rename", data.get("action") == "rename")
+    check("包含 exportResult", data.get("exportResult") is not None)
+    
+    export_result = data.get("exportResult", {})
+    final_file_path = export_result.get("filePath")
+    check("导出文件路径存在", final_file_path is not None)
+    
+    if final_file_path:
+        file_exists = os.path.exists(final_file_path)
+        check("导出文件真实存在于磁盘", file_exists)
+        
+        if file_exists:
+            stat = os.stat(final_file_path)
+            check("导出文件大小大于 0", stat.st_size > 0)
+            print(f"  导出文件: {final_file_path} ({stat.st_size} bytes)")
+            
+            with open(final_file_path, "r", encoding="utf-8-sig") as f:
+                content = f.read()
+            check("导出文件包含 CSV 表头", "异常ID" in content or "meterNo" in content or len(content) > 50)
+    
+    check("导出成功标志为 true", data.get("success") == True)
+    check("包含导出时间", data.get("exportedAt") is not None)
+    
+except Exception as e:
+    check("改名后文件真实存在验证", False, f"错误: {e}")
+
+print_section("测试 14: 服务端导出落盘 - 覆盖模式验证")
+try:
+    print("  先创建旧文件...")
+    old_content = "old_content_test"
+    with open(test_conflict_file, "w", encoding="utf-8") as f:
+        f.write(old_content)
+    
+    old_stat = os.stat(test_conflict_file)
+    old_size = old_stat.st_size
+    old_mtime = old_stat.st_mtime
+    
+    print(f"  旧文件: {test_conflict_file} ({old_size} bytes)")
+    
+    time.sleep(1)
+    
+    print("  使用 overwrite 方式处理冲突并执行导出...")
+    resolution = req("POST", "/check/export/resolve-conflict", {
+        "fileName": "drill_report.csv",
+        "action": "overwrite",
+        "performExport": True
+    })
+    
+    check("覆盖处理请求成功", resolution.get("success") == True)
+    data = resolution.get("data", {})
+    
+    check("处理方式为 overwrite", data.get("action") == "overwrite")
+    check("包含 exportResult", data.get("exportResult") is not None)
+    
+    export_result = data.get("exportResult", {})
+    check("导出文件路径正确", export_result.get("filePath") == test_conflict_file)
+    
+    new_stat = os.stat(test_conflict_file)
+    new_size = new_stat.st_size
+    new_mtime = new_stat.st_mtime
+    
+    check("文件已被覆盖（大小不同或修改时间不同）", new_size != old_size or new_mtime > old_mtime)
+    check("新文件大小大于 0", new_size > 0)
+    
+    print(f"  新文件: {test_conflict_file} ({new_size} bytes)")
+    
+    with open(test_conflict_file, "r", encoding="utf-8-sig") as f:
+        new_content = f.read()
+    check("文件内容已更新（不是旧内容）", new_content != old_content)
+    
+except Exception as e:
+    check("覆盖模式验证", False, f"错误: {e}")
+
+print_section("测试 15: 服务端导出落盘 - 切换目录验证")
+try:
+    test_export_dir = os.path.join(os.path.dirname(__file__), "test_export_output")
+    
+    print(f"  创建测试导出目录: {test_export_dir}")
+    if os.path.exists(test_export_dir):
+        import shutil
+        shutil.rmtree(test_export_dir)
+    os.makedirs(test_export_dir, exist_ok=True)
+    
+    print("  使用 changeDir 方式切换目录并执行导出...")
+    resolution = req("POST", "/check/export/resolve-conflict", {
+        "fileName": "drill_report.csv",
+        "action": "changeDir",
+        "exportDir": test_export_dir,
+        "performExport": True
+    })
+    
+    check("切换目录处理请求成功", resolution.get("success") == True)
+    data = resolution.get("data", {})
+    
+    check("处理方式为 changeDir", data.get("action") == "changeDir")
+    check("包含 exportResult", data.get("exportResult") is not None)
+    
+    export_result = data.get("exportResult", {})
+    final_file_path = export_result.get("filePath")
+    check("导出文件路径存在", final_file_path is not None)
+    
+    if final_file_path:
+        check("导出文件在新目录中", test_export_dir in final_file_path)
+        
+        file_exists = os.path.exists(final_file_path)
+        check("导出文件真实存在于新目录", file_exists)
+        
+        if file_exists:
+            stat = os.stat(final_file_path)
+            check("导出文件大小大于 0", stat.st_size > 0)
+            print(f"  导出文件: {final_file_path} ({stat.st_size} bytes)")
+            
+            dir_files = os.listdir(test_export_dir)
+            csv_files = [f for f in dir_files if f.endswith('.csv')]
+            check("新目录中有导出文件", len(csv_files) > 0)
+    
+    check("导出目录正确", export_result.get("exportDir") == test_export_dir)
+    
+    print("  清理测试目录...")
+    if os.path.exists(test_export_dir):
+        import shutil
+        shutil.rmtree(test_export_dir)
+        print(f"  已清理: {test_export_dir}")
+    
+except Exception as e:
+    check("切换目录验证", False, f"错误: {e}")
+    test_export_dir = os.path.join(os.path.dirname(__file__), "test_export_output")
+    if os.path.exists(test_export_dir):
+        import shutil
+        shutil.rmtree(test_export_dir)
+
+print_section("测试 16: 不可写目录报错验证")
+try:
+    print("  测试对无效路径的导出...")
+    
+    invalid_dir = "Z:/nonexistent_path_that_should_not_exist_12345"
+    
+    resolution = req("POST", "/check/export/resolve-conflict", {
+        "fileName": "test.csv",
+        "action": "changeDir",
+        "exportDir": invalid_dir,
+        "performExport": True
+    })
+    
+    check("请求返回结果", resolution is not None)
+    
+    if resolution.get("success") == False:
+        check("不可写目录返回失败", True)
+        check("包含错误信息", resolution.get("error") is not None)
+        check("包含 blockedStep", resolution.get("blockedStep") is not None or resolution.get("data", {}).get("blockedStep") is not None)
+        check("包含重试建议", resolution.get("retrySuggestion") is not None or resolution.get("data", {}).get("retrySuggestion") is not None)
+        
+        error_msg = resolution.get("error", "")
+        has_dir_error = "目录" in error_msg or "不可写" in error_msg or "无法" in error_msg
+        check("错误信息包含目录相关提示", has_dir_error)
+        
+        print(f"  错误信息: {error_msg}")
+    else:
+        check("不可写目录返回失败", False, "意外成功")
+    
+except Exception as e:
+    check("不可写目录报错验证", False, f"错误: {e}")
+
+print_section("测试 17: 报告导出到文件 API 直接验证")
+try:
+    print("  测试 /report/export-to-file API...")
+    
+    result = req("POST", "/report/export-to-file", {
+        "format": "json",
+        "fileName": "test_export_direct.json",
+        "conflictAction": "overwrite"
+    })
+    
+    check("导出 API 调用成功", result.get("success") == True)
+    data = result.get("data", {})
+    
+    check("返回文件名", data.get("fileName") is not None)
+    check("返回文件路径", data.get("filePath") is not None)
+    check("返回文件大小", data.get("fileSize") is not None)
+    check("返回记录数", data.get("recordCount") is not None)
+    check("返回导出时间", data.get("exportedAt") is not None)
+    
+    file_path = data.get("filePath")
+    if file_path and os.path.exists(file_path):
+        check("文件真实存在于磁盘", True)
+        stat = os.stat(file_path)
+        check("文件大小与返回一致", stat.st_size == data.get("fileSize"))
+        
+        with open(file_path, "r", encoding="utf-8") as f:
+            json_content = json.load(f)
+        check("JSON 文件格式正确", isinstance(json_content, list))
+        
+        print(f"  导出 JSON 文件: {file_path} ({stat.st_size} bytes, {len(json_content)} 条记录)")
+    
+    print("  清理直接导出的测试文件...")
+    test_files = ["test_export_direct.json"]
+    for f in test_files:
+        fp = os.path.join(os.path.dirname(__file__), f)
+        if os.path.exists(fp):
+            os.remove(fp)
+            print(f"  已清理: {fp}")
+    
+except Exception as e:
+    check("导出到文件 API 验证", False, f"错误: {e}")
+
+print_section("测试 18: 配置缺项验证")
+try:
+    print("  测试缺少必要参数的情况...")
+    
+    result1 = req("POST", "/report/export-to-file", {
+        "format": "invalid_format"
+    })
+    check("无效 format 参数返回失败", result1.get("success") == False)
+    check("无效 format 有错误提示", result1.get("error") is not None)
+    
+    result2 = req("POST", "/check/export/resolve-conflict", {})
+    check("缺少 fileName 和 action 返回失败", result2.get("success") == False)
+    check("缺少参数有错误提示", result2.get("error") is not None)
+    
+    result3 = req("POST", "/check/export/resolve-conflict", {
+        "fileName": "test.csv",
+        "action": "invalid_action"
+    })
+    check("无效 action 返回失败", result3.get("success") == False)
+    check("无效 action 有错误提示", result3.get("error") is not None)
+    
+    result4 = req("POST", "/check/export/resolve-conflict", {
+        "fileName": "test.csv",
+        "action": "changeDir"
+    })
+    check("changeDir 缺少 exportDir 返回失败", result4.get("success") == False)
+    check("changeDir 缺少 exportDir 有错误提示", result4.get("error") is not None)
+    
+    print("  所有配置缺项验证通过！")
+    
+except Exception as e:
+    check("配置缺项验证", False, f"错误: {e}")
+
+print_section("测试 19: 前端类型检查")
 try:
     print("  执行 npm run check...")
     result = subprocess.run(
@@ -553,5 +812,12 @@ else:
     print("  [OK] 处理冲突后验证通过")
     print("  [OK] README 演练链路能按说明走通")
     print("  [OK] 重启后所有状态完整保留")
+    print("  [OK] 改名后导出文件真实落盘")
+    print("  [OK] 覆盖模式导出文件正确")
+    print("  [OK] 切换目录导出文件到新位置")
+    print("  [OK] 不可写目录返回明确错误")
+    print("  [OK] 报告导出到文件 API 正常工作")
+    print("  [OK] 配置缺项返回明确提示")
+    print("  [OK] changeDir 缺少目录时返回明确提示")
     print("  [OK] 前端类型检查通过")
     sys.exit(0)

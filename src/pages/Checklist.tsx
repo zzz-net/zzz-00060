@@ -239,10 +239,10 @@ function ExportConflictModal({
 }: {
   conflict: ExportConflict;
   fileName: string;
-  onResolve: (action: 'rename' | 'overwrite' | 'cancel', newFileName?: string, exportDir?: string) => void;
+  onResolve: (action: 'rename' | 'overwrite' | 'cancel' | 'changeDir', newFileName?: string, exportDir?: string) => void;
   onClose: () => void;
 }) {
-  const [selectedAction, setSelectedAction] = useState<'rename' | 'overwrite' | 'cancel' | null>(null);
+  const [selectedAction, setSelectedAction] = useState<'rename' | 'overwrite' | 'cancel' | 'changeDir' | null>(null);
   const [newFileName, setNewFileName] = useState(conflict.suggestedName || '');
   const [customDir, setCustomDir] = useState('');
 
@@ -258,9 +258,16 @@ function ExportConflictModal({
     onResolve(
       selectedAction,
       selectedAction === 'rename' ? newFileName : undefined,
-      customDir || undefined
+      selectedAction === 'changeDir' ? customDir : undefined
     );
   };
+
+  const canConfirm = selectedAction && (
+    selectedAction === 'overwrite' ||
+    selectedAction === 'cancel' ||
+    (selectedAction === 'rename' && newFileName.trim()) ||
+    (selectedAction === 'changeDir' && customDir.trim())
+  );
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -282,6 +289,9 @@ function ExportConflictModal({
               <p>文件大小: {formatFileSize(conflict.fileSize)}</p>
               {conflict.modifiedAt && (
                 <p>修改时间: {new Date(conflict.modifiedAt).toLocaleString()}</p>
+              )}
+              {conflict.exportDir && (
+                <p>目录: <code className="bg-amber-100 px-1.5 py-0.5 rounded">{conflict.exportDir}</code></p>
               )}
             </div>
           </div>
@@ -344,42 +354,46 @@ function ExportConflictModal({
             </label>
 
             <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-              customDir
+              selectedAction === 'changeDir'
                 ? 'border-amber-400 bg-amber-50'
                 : 'border-slate-200 hover:border-slate-300'
             }`}>
-              <div className="mt-1">
-                <FolderOpen className="w-4 h-4 text-slate-500" />
-              </div>
+              <input
+                type="radio"
+                name="conflictAction"
+                checked={selectedAction === 'changeDir'}
+                onChange={() => setSelectedAction('changeDir')}
+                className="mt-1"
+              />
               <div className="flex-1">
                 <div className="flex items-center gap-2">
+                  <FolderOpen className="w-4 h-4 text-slate-500" />
                   <span className="text-sm font-medium text-slate-800">切换导出目录</span>
                 </div>
                 <p className="text-xs text-slate-500 mt-1">指定一个新的目录路径保存文件</p>
-                <input
-                  type="text"
-                  value={customDir}
-                  onChange={(e) => {
-                    setCustomDir(e.target.value);
-                    if (e.target.value) setSelectedAction('rename');
-                  }}
-                  className="mt-2 w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  placeholder="例如: C:/Users/Documents/Exports"
-                />
+                {selectedAction === 'changeDir' && (
+                  <input
+                    type="text"
+                    value={customDir}
+                    onChange={(e) => setCustomDir(e.target.value)}
+                    className="mt-2 w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    placeholder="例如: C:/Users/Documents/Exports"
+                  />
+                )}
               </div>
             </label>
           </div>
         </div>
         <div className="p-5 border-t border-slate-200 flex gap-3">
           <button
-            onClick={onClose}
+            onClick={() => onResolve('cancel')}
             className="flex-1 bg-slate-100 text-slate-700 rounded-lg py-2 text-sm font-medium hover:bg-slate-200 transition-colors"
           >
-            取消
+            取消导出
           </button>
           <button
             onClick={handleConfirm}
-            disabled={!selectedAction}
+            disabled={!canConfirm}
             className="flex-1 bg-amber-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             确认并继续
@@ -420,6 +434,7 @@ export default function Checklist() {
     checkExportConflict,
     resolveExportConflict,
     fetchExportConfigs,
+    exportReportToFile,
   } = useAppStore();
 
   const navigate = useNavigate();
@@ -549,7 +564,7 @@ export default function Checklist() {
         return;
       }
 
-      await performExport('csv', 'drill_report.csv');
+      const csvResult = await performExport('csv', 'drill_report.csv');
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -561,12 +576,17 @@ export default function Checklist() {
         return;
       }
 
-      await performExport('json', 'drill_report.json');
+      const jsonResult = await performExport('json', 'drill_report.json');
 
       updateDrillStep('export', {
         status: 'completed',
         completedAt: new Date().toISOString(),
-        result: { files: ['drill_report.csv', 'drill_report.json'], success: true },
+        result: {
+          files: ['drill_report.csv', 'drill_report.json'],
+          success: true,
+          csvExportResult: csvResult,
+          jsonExportResult: jsonResult,
+        },
       });
       setDrillError('');
       setDrillBlockedStep('');
@@ -580,24 +600,20 @@ export default function Checklist() {
         setDrillRetrySuggestion((err as any).retrySuggestion || '请检查导出目录权限，或更换文件名后重试。');
       }
     }
-  }, [updateDrillStep, checkExportConflict]);
+  }, [updateDrillStep, checkExportConflict, exportReportToFile]);
 
-  const performExport = async (format: 'csv' | 'json', fileName: string) => {
-    const res = await fetch(`/api/report/export?format=${format}`);
-    if (!res.ok) throw new Error(`${format.toUpperCase()}导出失败`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const performExport = async (format: 'csv' | 'json', fileName: string, exportDir?: string) => {
+    const result = await exportReportToFile({
+      format,
+      fileName,
+      exportDir,
+      conflictAction: 'rename',
+    });
+    return result;
   };
 
   const handleResolveConflict = useCallback(async (
-    action: 'rename' | 'overwrite' | 'cancel',
+    action: 'rename' | 'overwrite' | 'cancel' | 'changeDir',
     newFileName?: string,
     exportDir?: string
   ) => {
@@ -607,6 +623,7 @@ export default function Checklist() {
         action,
         newFileName,
         exportDir,
+        performExport: true,
       });
 
       if (action === 'cancel') {
@@ -617,15 +634,16 @@ export default function Checklist() {
         });
         setDrillError('导出报告失败: 用户取消了文件名冲突处理。必须处理冲突才能完成演练。');
         setDrillBlockedStep('导出报告');
-        setDrillRetrySuggestion('请重新点击「导出报告」，并选择合适的冲突处理方式（改名或覆盖）。');
+        setDrillRetrySuggestion('请重新点击「导出报告」，并选择合适的冲突处理方式（改名、覆盖或切换目录）。');
         setShowExportConflict(false);
         return;
       }
 
       const finalFileName = resolution.newFileName || conflictFileName;
+      const finalExportDir = resolution.exportDir || exportDir;
 
       if (pendingExportFormat === 'csv') {
-        await performExport('csv', finalFileName);
+        const csvExportResult = resolution.exportResult;
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -635,22 +653,33 @@ export default function Checklist() {
           setPendingExportFormat('json');
           return;
         }
-        await performExport('json', 'drill_report.json');
-      } else if (pendingExportFormat === 'json') {
-        await performExport('json', finalFileName);
-      }
+        const jsonExportResult = await performExport('json', 'drill_report.json', finalExportDir);
 
-      updateDrillStep('export', {
-        status: 'completed',
-        completedAt: new Date().toISOString(),
-        result: {
-          files: pendingExportFormat === 'csv'
-            ? [finalFileName, 'drill_report.json']
-            : ['drill_report.csv', finalFileName],
-          success: true,
-          conflictResolution: resolution,
-        },
-      });
+        updateDrillStep('export', {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          result: {
+            files: [finalFileName, 'drill_report.json'],
+            success: true,
+            conflictResolution: resolution,
+            csvExportResult,
+            jsonExportResult,
+          },
+        });
+      } else if (pendingExportFormat === 'json') {
+        const jsonExportResult = resolution.exportResult;
+
+        updateDrillStep('export', {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          result: {
+            files: ['drill_report.csv', finalFileName],
+            success: true,
+            conflictResolution: resolution,
+            jsonExportResult,
+          },
+        });
+      }
 
       setShowExportConflict(false);
       setPendingExportFormat(null);

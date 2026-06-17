@@ -1,6 +1,12 @@
 import { Router, type Request, type Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import db from '../db.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const router = Router()
 
@@ -47,7 +53,8 @@ interface CompletionValidation {
 function validateDrillCompletion(
   steps: DrillStep[],
   selfCheckStatus: string | null,
-  hasConflictResolution: boolean
+  hasConflictResolution: boolean,
+  conflictResolution?: any
 ): CompletionValidation {
   const REQUIRED_STEPS = ['import', 'judge', 'close-reopen', 'export']
 
@@ -111,6 +118,56 @@ function validateDrillCompletion(
     validation.blockedStep = '导出报告'
     validation.retrySuggestion = '请在导出报告步骤中处理文件名冲突：选择自动重命名、确认覆盖或切换导出目录。'
     return validation
+  }
+
+  const exportStep = steps.find(s => s.id === 'export')
+  if (exportStep?.status === 'completed') {
+    let exportFilesVerified = false
+    let verificationError = ''
+
+    if (conflictResolution?.exportResult?.filePath) {
+      const filePath = conflictResolution.exportResult.filePath
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath)
+        if (stat.size > 0) {
+          exportFilesVerified = true
+        } else {
+          verificationError = '导出文件为空（0 字节）'
+        }
+      } else {
+        verificationError = `导出文件不存在: ${filePath}`
+      }
+    } else if (exportStep.result?.files && Array.isArray(exportStep.result.files)) {
+      const exportDir = path.resolve(__dirname, '..', '..')
+      const allFilesExist = exportStep.result.files.every((f: string) => {
+        const filePath = path.join(exportDir, f)
+        if (!fs.existsSync(filePath)) return false
+        const stat = fs.statSync(filePath)
+        return stat.size > 0
+      })
+      if (allFilesExist) {
+        exportFilesVerified = true
+      } else {
+        verificationError = '部分或全部导出文件不存在或为空'
+      }
+    }
+
+    if (!exportFilesVerified && exportStep.result?.conflictResolution?.exportResult?.filePath) {
+      const filePath = exportStep.result.conflictResolution.exportResult.filePath
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath)
+        if (stat.size > 0) {
+          exportFilesVerified = true
+        }
+      }
+    }
+
+    if (!exportFilesVerified) {
+      validation.failureReason = `导出文件落盘验证失败：${verificationError || '无法确认导出文件是否真实存在'}。必须确保文件实际写入磁盘且内容非空。`
+      validation.blockedStep = '导出报告'
+      validation.retrySuggestion = '请重新执行导出报告步骤，确保文件成功写入磁盘后再完成演练。'
+      return validation
+    }
   }
 
   validation.completeValidationPassed = true
@@ -177,8 +234,9 @@ router.post('/validate-completion', (req: Request, res: Response): void => {
 
   const selfCheckStatus = latestCheck?.status || null
   const hasConflictResolution = !!(latestCheck?.conflictResolution && latestCheck.conflictResolution !== '')
+  const conflictResolution = hasConflictResolution ? JSON.parse(latestCheck.conflictResolution) : null
 
-  const validation = validateDrillCompletion(steps, selfCheckStatus, hasConflictResolution)
+  const validation = validateDrillCompletion(steps, selfCheckStatus, hasConflictResolution, conflictResolution)
 
   res.json({ success: true, data: validation })
 })
@@ -210,8 +268,9 @@ router.post('/complete', (req: Request, res: Response): void => {
 
   const selfCheckStatus = latestCheck?.status || null
   const hasConflictResolution = !!(latestCheck?.conflictResolution && latestCheck.conflictResolution !== '')
+  const conflictResolution = hasConflictResolution ? JSON.parse(latestCheck.conflictResolution) : null
 
-  const validation = validateDrillCompletion(steps, selfCheckStatus, hasConflictResolution)
+  const validation = validateDrillCompletion(steps, selfCheckStatus, hasConflictResolution, conflictResolution)
 
   const id = uuidv4()
   const now = new Date().toISOString()

@@ -171,6 +171,38 @@ export interface ExportConflict {
   fileSize?: number;
   modifiedAt?: string;
   suggestedName?: string;
+  exportDir?: string;
+}
+
+export interface ExportResult {
+  fileName: string;
+  filePath: string;
+  exportDir: string;
+  format: string;
+  fileSize: number;
+  recordCount: number;
+  exportedAt: string;
+  conflictAction: string;
+  originalFileExists: boolean;
+}
+
+export interface ConflictResolution {
+  action: 'rename' | 'overwrite' | 'cancel' | 'changeDir';
+  fileName: string;
+  exportDir: string;
+  originalFilePath: string;
+  originalFileExists: boolean;
+  resolvedAt: string;
+  success: boolean;
+  newFileName?: string;
+  finalFilePath?: string;
+  failureReason?: string;
+  retrySuggestion?: string;
+  exportResult?: ExportResult;
+  exportedAt?: string;
+  fileSize?: number;
+  recordCount?: number;
+  exportError?: string;
 }
 
 export interface DrillCompletionValidation {
