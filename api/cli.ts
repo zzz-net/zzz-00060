@@ -65,6 +65,7 @@ function printHelp() {
   create <options>           创建新导出任务
   retry <taskId>             重试失败/取消的任务
   cancel <taskId>            取消排队/执行中的任务
+  files [limit]              列出实际生成的导出文件
   help                       显示此帮助
 
 创建任务选项:
@@ -73,6 +74,9 @@ function printHelp() {
   --name <filename>          文件名，不含扩展名（必填）
   --conflict <action>        冲突处理: rename | overwrite | 留空表示手动处理
   --operator <name>          操作人名称（默认: 导出员）
+  --batch <batchId>          按批次筛选数据（可选）
+  --status <status>          按异常状态筛选: pending/confirmed/false_positive/closed（可选）
+  --type <anomalyType>       按异常类型筛选（可选）
 
 示例:
   node --import tsx/esm api/cli.ts list
@@ -80,8 +84,11 @@ function printHelp() {
   node --import tsx/esm api/cli.ts summary
   node --import tsx/esm api/cli.ts show <task-uuid>
   node --import tsx/esm api/cli.ts create --format json --dir D:/exports --name monthly_report --conflict rename
+  node --import tsx/esm api/cli.ts create --format csv --dir D:/exports --name pending_only --status pending
   node --import tsx/esm api/cli.ts retry <task-uuid>
   node --import tsx/esm api/cli.ts cancel <task-uuid>
+  node --import tsx/esm api/cli.ts files
+  node --import tsx/esm api/cli.ts files 10
 `)
 }
 
@@ -166,6 +173,10 @@ async function cmdShow(args: string[]) {
   ${t.conflictAction ? `冲突处理:     ${t.conflictAction === 'rename' ? '自动重命名' : t.conflictAction === 'overwrite' ? '覆盖原文件' : '取消导出'}` : ''}
   ${t.conflictResolved ? `冲突已解决:   是` : ''}
   ${t.conflictInfo ? `冲突文件:     ${t.conflictInfo.fileName} (${formatSize(t.conflictInfo.fileSize || 0)})` : ''}
+  ${t.filterBatchId || t.filterAnomalyStatus || t.filterAnomalyType ? `\n  数据筛选:` : ''}
+  ${t.filterBatchId ? `  批次ID:     ${t.filterBatchId}` : ''}
+  ${t.filterAnomalyStatus ? `  异常状态:   ${t.filterAnomalyStatus}` : ''}
+  ${t.filterAnomalyType ? `  异常类型:   ${t.filterAnomalyType}` : ''}
   ${t.failureReason ? `\n  失败原因:     ${t.failureReason}` : ''}
 `)
   if (t.keyLogs && t.keyLogs.length > 0) {
@@ -188,6 +199,9 @@ async function cmdCreate(args: string[]) {
     if (key === 'name') opts.fileName = val
     if (key === 'conflict') opts.conflictAction = val
     if (key === 'operator') opts.operator = val
+    if (key === 'batch') opts.filterBatchId = val
+    if (key === 'status') opts.filterAnomalyStatus = val
+    if (key === 'type') opts.filterAnomalyType = val
   }
 
   if (!opts.exportDir) {
@@ -252,6 +266,39 @@ async function cmdCancel(args: string[]) {
   console.log(`任务已取消`)
 }
 
+async function cmdFiles(args: string[]) {
+  const limit = args[0] || '20'
+  const { status: code, data } = await httpRequest('GET', `/api/export-tasks/generated-files?limit=${limit}`)
+  if (code !== 200 || !data?.success) {
+    console.error('查询失败:', data?.error || `HTTP ${code}`)
+    process.exit(1)
+  }
+  const files: any[] = data.data || []
+  if (files.length === 0) {
+    console.log('暂无已生成的导出文件')
+    return
+  }
+  console.log(`\n共 ${data.total} 个已生成文件:\n`)
+  console.log('文件名                          格式  大小       记录数  存在  任务编号          完成时间')
+  console.log('──────────────────────────────  ────  ─────────  ──────  ────  ────────────────  ───────────────────')
+  for (const f of files) {
+    const name = (f.finalFileName || '').padEnd(30).slice(0, 30)
+    const fmt = (f.format || '').toUpperCase().padEnd(4)
+    const size = formatSize(f.fileSize || 0).padEnd(10)
+    const count = String(f.recordCount || 0).padEnd(6)
+    const exists = f.exists ? '✓' : '✗'
+    const no = (f.taskNo || '').padEnd(16)
+    const time = f.completedAt ? new Date(f.completedAt).toLocaleString() : ''
+    const filters: string[] = []
+    if (f.filters?.batchId) filters.push(`批次=${f.filters.batchId.slice(0, 8)}`)
+    if (f.filters?.anomalyStatus) filters.push(`状态=${f.filters.anomalyStatus}`)
+    if (f.filters?.anomalyType) filters.push(`类型=${f.filters.anomalyType}`)
+    const filterStr = filters.length > 0 ? ` [${filters.join(', ')}]` : ''
+    console.log(`${name}  ${fmt}  ${size}  ${count}  ${exists}    ${no}  ${time}${filterStr}`)
+  }
+  console.log()
+}
+
 async function main() {
   const args = process.argv.slice(2)
   const command = args[0] || 'help'
@@ -276,6 +323,9 @@ async function main() {
         break
       case 'cancel':
         await cmdCancel(rest)
+        break
+      case 'files':
+        await cmdFiles(rest)
         break
       case 'help':
       case '--help':

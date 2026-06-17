@@ -268,6 +268,9 @@ export interface ExportTask {
   startedAt: string;
   completedAt: string;
   durationMs: number;
+  filterBatchId: string;
+  filterAnomalyStatus: string;
+  filterAnomalyType: string;
 }
 
 export interface CreateExportTaskRequest {
@@ -277,6 +280,37 @@ export interface CreateExportTaskRequest {
   conflictAction?: ExportConflictAction;
   newFileName?: string;
   operator?: string;
+  filterBatchId?: string;
+  filterAnomalyStatus?: string;
+  filterAnomalyType?: string;
+}
+
+export interface ExportTaskFilterOptions {
+  batches: Array<{ id: string; batchNo: string; fileName: string }>;
+  anomalyStatuses: string[];
+  anomalyTypes: string[];
+}
+
+export interface ExportTaskGeneratedFile {
+  taskId: string;
+  taskNo: string;
+  format: string;
+  exportDir: string;
+  originalFileName: string;
+  finalFileName: string;
+  finalFilePath: string;
+  fileSize: number;
+  recordCount: number;
+  conflictAction: string;
+  operator: string;
+  createdAt: string;
+  completedAt: string;
+  exists: boolean;
+  filters: {
+    batchId: string;
+    anomalyStatus: string;
+    anomalyType: string;
+  };
 }
 
 export interface ExportTaskSummary {

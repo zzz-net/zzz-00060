@@ -17,7 +17,7 @@ import time
 import tempfile
 import shutil
 
-BASE = "http://127.0.0.1:3001/api"
+BASE = os.environ.get("TEST_EXPORT_BASE", "http://127.0.0.1:3001/api")
 
 def req(method, path, body=None):
     h = {"Content-Type": "application/json"}
@@ -459,6 +459,187 @@ try:
     })
     code, data = req("GET", f"/export-tasks/check-conflict/preflight?{query2}")
     check("预检 - 不存在文件 exists=false", data.get("data", {}).get("exists") is False)
+
+    # =====================================================================
+    # 测试 8: 数据筛选功能
+    # =====================================================================
+    print()
+    print("=" * 70)
+    print("测试 8: 数据筛选 - 按批次/状态/类型过滤导出数据")
+    print("=" * 70)
+
+    # 8.1 筛选选项接口
+    code, data = req("GET", "/export-tasks/filter-options")
+    check("筛选选项接口成功", code == 200 and data.get("success") is True)
+    filter_opts = data.get("data", {})
+    check("筛选选项含 batches 数组", isinstance(filter_opts.get("batches"), list))
+    check("筛选选项含 anomalyStatuses 数组", isinstance(filter_opts.get("anomalyStatuses"), list))
+    check("筛选选项含 anomalyTypes 数组", isinstance(filter_opts.get("anomalyTypes"), list))
+
+    # 8.2 创建带筛选条件的任务（按异常状态筛选）
+    code, data = req("POST", "/export-tasks", {
+        "format": "csv",
+        "exportDir": TEST_DIR,
+        "fileName": "test_filtered_pending.csv",
+        "conflictAction": "rename",
+        "filterAnomalyStatus": "pending",
+    })
+    check("创建筛选任务（pending）返回 200", code == 200)
+    task_filter_id = data.get("data", {}).get("id", "")
+    final_filter = wait_for_status(task_filter_id, "success", timeout=10)
+    check("筛选任务 - 最终成功", final_filter and final_filter.get("status") == "success",
+          f"实际={final_filter.get('status') if final_filter else 'None'}, 原因={final_filter.get('failureReason') if final_filter else ''}")
+    if final_filter and final_filter.get("status") == "success":
+        check("筛选任务 - filterAnomalyStatus 持久化", final_filter.get("filterAnomalyStatus") == "pending")
+        check("筛选任务 - 文件真实存在", file_exists_and_not_empty(final_filter.get("finalFilePath", "")))
+        check("筛选任务 - keyLogs 包含筛选信息",
+              any("筛选" in l for l in final_filter.get("keyLogs", [])),
+              f"logs={final_filter.get('keyLogs', [])}")
+
+    # 8.3 创建不筛选的任务，对比记录数
+    code, data = req("POST", "/export-tasks", {
+        "format": "csv",
+        "exportDir": TEST_DIR,
+        "fileName": "test_all_data.csv",
+        "conflictAction": "rename",
+    })
+    task_all_id = data.get("data", {}).get("id", "")
+    final_all = wait_for_status(task_all_id, "success", timeout=10)
+    if final_all and final_filter:
+        all_count = final_all.get("recordCount", 0)
+        filtered_count = final_filter.get("recordCount", 0)
+        check("筛选结果 - 全部记录数 >= 筛选后记录数", all_count >= filtered_count,
+              f"全部={all_count}, 筛选pending={filtered_count}")
+
+    # 8.4 筛选条件持久化验证
+    code, data = req("GET", f"/export-tasks/{task_filter_id}")
+    check("筛选持久化 - 查询成功", code == 200 and data.get("success") is True)
+    t_filter = data.get("data", {})
+    check("筛选持久化 - filterAnomalyStatus 保留", t_filter.get("filterAnomalyStatus") == "pending")
+
+    # =====================================================================
+    # 测试 9: 已生成文件列表接口
+    # =====================================================================
+    print()
+    print("=" * 70)
+    print("测试 9: 已生成文件列表接口")
+    print("=" * 70)
+
+    code, data = req("GET", "/export-tasks/generated-files?limit=50")
+    check("已生成文件列表接口成功", code == 200 and data.get("success") is True)
+    gen_files = data.get("data", [])
+    check("已生成文件列表是数组", isinstance(gen_files, list))
+    check("已生成文件列表非空", len(gen_files) > 0,
+          f"实际数量={len(gen_files)}")
+
+    if gen_files:
+        first_file = gen_files[0]
+        check("文件条目含 finalFileName", bool(first_file.get("finalFileName")))
+        check("文件条目含 finalFilePath", bool(first_file.get("finalFilePath")))
+        check("文件条目含 format", bool(first_file.get("format")))
+        check("文件条目含 fileSize", first_file.get("fileSize", 0) >= 0)
+        check("文件条目含 recordCount", first_file.get("recordCount", 0) >= 0)
+        check("文件条目含 taskNo", bool(first_file.get("taskNo")))
+        check("文件条目含 exists 标记", isinstance(first_file.get("exists"), bool))
+        check("文件条目含 filters 对象", isinstance(first_file.get("filters"), dict))
+
+        # 验证 exists 字段与磁盘一致性
+        fp = first_file.get("finalFilePath", "")
+        if fp:
+            disk_exists = os.path.isfile(fp)
+            check("exists 标记与磁盘一致", first_file.get("exists") == disk_exists,
+                  f"API={first_file.get('exists')}, 磁盘={disk_exists}")
+
+    # =====================================================================
+    # 测试 10: 界面提示/CLI摘要/磁盘结果一致性
+    # =====================================================================
+    print()
+    print("=" * 70)
+    print("测试 10: 界面提示/CLI摘要/磁盘结果一致性")
+    print("=" * 70)
+
+    # 创建一个确定会成功的任务，然后验证所有维度一致
+    code, data = req("POST", "/export-tasks", {
+        "format": "json",
+        "exportDir": TEST_DIR,
+        "fileName": "test_consistency.json",
+        "conflictAction": "rename",
+        "operator": "CONSISTENCY_TESTER",
+    })
+    consistency_id = data["data"]["id"]
+    consistency_taskNo = data["data"]["taskNo"]
+    final_cons = wait_for_status(consistency_id, "success", timeout=10)
+
+    if final_cons and final_cons.get("status") == "success":
+        # 10.1 API 返回一致
+        check("一致性 - API status=success", final_cons.get("status") == "success")
+        check("一致性 - API finalFileName 非空", bool(final_cons.get("finalFileName")))
+        check("一致性 - API fileSize > 0", final_cons.get("fileSize", 0) > 0)
+        check("一致性 - API recordCount >= 0", final_cons.get("recordCount", 0) >= 0)
+        check("一致性 - API operator 正确", final_cons.get("operator") == "CONSISTENCY_TESTER")
+
+        # 10.2 磁盘文件一致
+        disk_path = final_cons.get("finalFilePath", "")
+        check("一致性 - 磁盘文件存在", os.path.isfile(disk_path))
+        if os.path.isfile(disk_path):
+            disk_size = os.path.getsize(disk_path)
+            check("一致性 - 磁盘文件大小 > 0", disk_size > 0)
+            with open(disk_path, "r", encoding="utf-8") as f:
+                disk_content = json.load(f)
+            check("一致性 - 磁盘 JSON 是数组", isinstance(disk_content, list))
+            check("一致性 - 磁盘记录数与 API 一致",
+                  len(disk_content) == final_cons.get("recordCount", -1),
+                  f"磁盘={len(disk_content)}, API={final_cons.get('recordCount')}")
+
+        # 10.3 generated-files 列表一致
+        code, gf_data = req("GET", "/export-tasks/generated-files?limit=100")
+        if code == 200 and gf_data.get("success"):
+            matched = [f for f in gf_data.get("data", []) if f.get("taskId") == consistency_id]
+            check("一致性 - generated-files 列表中有该任务", len(matched) > 0)
+            if matched:
+                gf = matched[0]
+                check("一致性 - generated-files taskNo 匹配", gf.get("taskNo") == consistency_taskNo)
+                check("一致性 - generated-files format 匹配", gf.get("format") == "json")
+                check("一致性 - generated-files operator 匹配", gf.get("operator") == "CONSISTENCY_TESTER")
+                check("一致性 - generated-files exists=true", gf.get("exists") is True)
+
+        # 10.4 任务列表一致
+        code, list_data = req("GET", "/export-tasks?limit=100")
+        if code == 200 and list_data.get("success"):
+            list_match = [t for t in list_data.get("data", []) if t.get("id") == consistency_id]
+            check("一致性 - 任务列表中有该任务", len(list_match) > 0)
+            if list_match:
+                check("一致性 - 列表状态与详情一致", list_match[0].get("status") == "success")
+
+    # =====================================================================
+    # 测试 11: 冲突后重试完整链路
+    # =====================================================================
+    print()
+    print("=" * 70)
+    print("测试 11: 冲突后重试 - rename → overwrite → 切换目录 完整链路")
+    print("=" * 70)
+
+    # 创建冲突
+    code, data = req("POST", "/export-tasks", {
+        "format": "csv",
+        "exportDir": TEST_DIR,
+        "fileName": "test_basic.csv",
+        "conflictAction": "rename",
+    })
+    retry_task_id = data["data"]["id"]
+    retry_final = wait_for_status(retry_task_id, "success", timeout=10)
+    if retry_final and retry_final.get("status") == "success":
+        check("冲突重试链路 - rename 成功", True)
+        # 现在再 retry 该任务，此时会产生新冲突
+        code, data = req("POST", f"/export-tasks/{retry_task_id}/retry")
+        check("冲突重试链路 - retry 接口成功", code == 200 and data.get("success") is True)
+        retry_final2 = wait_for_status(retry_task_id, "success", timeout=10)
+        check("冲突重试链路 - retry 后最终成功",
+              retry_final2 and retry_final2.get("status") == "success",
+              f"实际={retry_final2.get('status') if retry_final2 else 'None'}")
+        if retry_final2 and retry_final2.get("status") == "success":
+            check("冲突重试链路 - 最终文件存在",
+                  file_exists_and_not_empty(retry_final2.get("finalFilePath", "")))
 
 finally:
     # 清理

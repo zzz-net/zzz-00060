@@ -3,7 +3,7 @@ import type {
   Batch, Rule, Anomaly, ReportSummary, SelfCheckRecord,
   DrillSummary, DrillStep, ExportConflict, ExportConfig,
   DrillCompletionValidation, ExportTask, ExportTaskSummary,
-  CreateExportTaskRequest
+  CreateExportTaskRequest, ExportTaskFilterOptions, ExportTaskGeneratedFile
 } from '@/shared/types';
 
 interface AnomalyFilters {
@@ -54,6 +54,8 @@ interface AppState {
   exportTasksTotal: number;
   exportTaskSummary: ExportTaskSummary | null;
   currentExportTask: ExportTask | null;
+  exportFilterOptions: ExportTaskFilterOptions | null;
+  exportGeneratedFiles: ExportTaskGeneratedFile[];
 
   fetchBatches: () => Promise<void>;
   importBatch: (file: File) => Promise<void>;
@@ -126,6 +128,8 @@ interface AppState {
   cancelExportTask: (id: string) => Promise<ExportTask>;
   changeDirRetryExportTask: (id: string, exportDir: string) => Promise<ExportTask>;
   preflightCheckConflict: (data: { exportDir: string; fileName: string }) => Promise<any>;
+  fetchExportFilterOptions: () => Promise<ExportTaskFilterOptions>;
+  fetchExportGeneratedFiles: (limit?: number) => Promise<ExportTaskGeneratedFile[]>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -169,6 +173,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   exportTasksTotal: 0,
   exportTaskSummary: null,
   currentExportTask: null,
+  exportFilterOptions: null,
+  exportGeneratedFiles: [],
 
   fetchBatches: async () => {
     set({ batchesLoading: true });
@@ -700,5 +706,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     const res = await fetch(`/api/export-tasks/check-conflict/preflight?${query.toString()}`);
     const json = await res.json();
     return json;
+  },
+
+  fetchExportFilterOptions: async () => {
+    try {
+      const res = await fetch('/api/export-tasks/filter-options');
+      const json = await res.json();
+      if (json.success) {
+        set({ exportFilterOptions: json.data });
+        return json.data;
+      }
+      return get().exportFilterOptions || { batches: [], anomalyStatuses: [], anomalyTypes: [] };
+    } catch {
+      return get().exportFilterOptions || { batches: [], anomalyStatuses: [], anomalyTypes: [] };
+    }
+  },
+
+  fetchExportGeneratedFiles: async (limit) => {
+    try {
+      const query = limit ? `?limit=${limit}` : '';
+      const res = await fetch(`/api/export-tasks/generated-files${query}`);
+      const json = await res.json();
+      if (json.success) {
+        set({ exportGeneratedFiles: json.data || [] });
+        return json.data || [];
+      }
+      return [];
+    } catch {
+      return [];
+    }
   },
 }));

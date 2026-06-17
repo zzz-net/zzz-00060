@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Download, Plus, RefreshCw, X, Clock, CheckCircle, XCircle, AlertCircle,
   Pause, FolderOpen, FileJson, FileSpreadsheet, RotateCcw, Eye, Trash2,
-  ChevronDown, ChevronRight, FileWarning, Edit3
+  ChevronDown, ChevronRight, FileWarning, Edit3, Filter, FileCheck
 } from 'lucide-react';
 import { useAppStore } from '@/stores/app-store';
 import type { ExportTask, ExportTaskStatus, ExportConflictAction } from '@/shared/types';
@@ -28,6 +28,8 @@ export default function ExportTasks() {
     exportTasksLoading,
     exportTasksTotal,
     exportTaskSummary,
+    exportFilterOptions,
+    exportGeneratedFiles,
     fetchExportTaskSummary,
     fetchExportTasks,
     createExportTask,
@@ -36,6 +38,8 @@ export default function ExportTasks() {
     resolveExportTaskConflict,
     changeDirRetryExportTask,
     preflightCheckConflict,
+    fetchExportFilterOptions,
+    fetchExportGeneratedFiles,
   } = useAppStore();
 
   const [showCreate, setShowCreate] = useState(false);
@@ -50,6 +54,9 @@ export default function ExportTasks() {
   const [formOperator, setFormOperator] = useState('导出员');
   const [formError, setFormError] = useState('');
   const [formSubmitting, setFormSubmitting] = useState(false);
+  const [formFilterBatchId, setFormFilterBatchId] = useState('');
+  const [formFilterAnomalyStatus, setFormFilterAnomalyStatus] = useState('');
+  const [formFilterAnomalyType, setFormFilterAnomalyType] = useState('');
 
   const [conflictTask, setConflictTask] = useState<ExportTask | null>(null);
   const [conflictAction, setConflictAction] = useState<'rename' | 'overwrite' | 'cancel' | 'changeDir' | null>(null);
@@ -60,14 +67,18 @@ export default function ExportTasks() {
   const [changeDirValue, setChangeDirValue] = useState('');
 
   const [pollTimer, setPollTimer] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'tasks' | 'files'>('tasks');
 
   useEffect(() => {
     fetchExportTaskSummary();
     fetchExportTasks();
+    fetchExportFilterOptions();
+    fetchExportGeneratedFiles();
 
     const timer = window.setInterval(() => {
       fetchExportTaskSummary();
       fetchExportTasks(statusFilter ? { status: statusFilter } : undefined);
+      if (activeTab === 'files') fetchExportGeneratedFiles();
     }, 3000);
     setPollTimer(timer);
 
@@ -104,6 +115,9 @@ export default function ExportTasks() {
         conflictAction: formConflictAction,
         newFileName: formNewFileName.trim() || undefined,
         operator: formOperator.trim() || undefined,
+        filterBatchId: formFilterBatchId || undefined,
+        filterAnomalyStatus: formFilterAnomalyStatus || undefined,
+        filterAnomalyType: formFilterAnomalyType || undefined,
       });
       setShowCreate(false);
       setFormFormat('csv');
@@ -112,6 +126,9 @@ export default function ExportTasks() {
       setFormConflictAction('');
       setFormNewFileName('');
       setFormOperator('导出员');
+      setFormFilterBatchId('');
+      setFormFilterAnomalyStatus('');
+      setFormFilterAnomalyType('');
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : '创建任务失败');
     } finally {
@@ -149,6 +166,13 @@ export default function ExportTasks() {
 
   const needsConflictResolution = (task: ExportTask) => {
     return task.status === 'queued' && task.conflictInfo?.exists && !task.conflictAction;
+  };
+
+  const anomalyStatusLabel: Record<string, string> = {
+    pending: '待复核',
+    confirmed: '已确认',
+    false_positive: '误报',
+    closed: '已关闭',
   };
 
   return (
@@ -196,9 +220,33 @@ export default function ExportTasks() {
 
       <div className="bg-white rounded-lg shadow-sm border border-slate-200">
         <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-700">任务列表</h3>
-          <div className="flex items-center gap-2">
-            <select
+          <div className="flex items-center gap-4">
+            <h3 className="text-base font-semibold text-slate-700">
+              {activeTab === 'tasks' ? '任务列表' : '已生成文件'}
+            </h3>
+            <div className="flex bg-slate-100 rounded-lg p-0.5">
+              <button
+                onClick={() => setActiveTab('tasks')}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                  activeTab === 'tasks' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                任务列表
+              </button>
+              <button
+                onClick={() => { setActiveTab('files'); fetchExportGeneratedFiles(); }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                  activeTab === 'files' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <FileCheck className="w-3 h-3 inline mr-1" />
+                已生成文件
+              </button>
+            </div>
+          </div>
+          {activeTab === 'tasks' && (
+            <div className="flex items-center gap-2">
+              <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
@@ -221,13 +269,25 @@ export default function ExportTasks() {
               刷新
             </button>
           </div>
+          )}
+          {activeTab === 'files' && (
+            <button
+              onClick={() => fetchExportGeneratedFiles()}
+              className="flex items-center gap-1 text-slate-600 hover:text-slate-800 text-sm"
+            >
+              <RefreshCw className="w-4 h-4" />
+              刷新
+            </button>
+          )}
         </div>
 
-        {exportTasksLoading && !exportTasks.length ? (
-          <div className="text-center py-12 text-sm text-slate-400">加载中...</div>
-        ) : !exportTasks.length ? (
-          <div className="text-center py-12 text-sm text-slate-400">暂无导出任务</div>
-        ) : (
+        {activeTab === 'tasks' ? (
+          <>
+            {exportTasksLoading && !exportTasks.length ? (
+              <div className="text-center py-12 text-sm text-slate-400">加载中...</div>
+            ) : !exportTasks.length ? (
+              <div className="text-center py-12 text-sm text-slate-400">暂无导出任务</div>
+            ) : (
           <div className="divide-y divide-slate-100">
             {exportTasks.map((task) => {
               const cfg = statusConfig[task.status];
@@ -403,6 +463,25 @@ export default function ExportTasks() {
                             </div>
                           </div>
                         )}
+                        {(task.filterBatchId || task.filterAnomalyStatus || task.filterAnomalyType) && (
+                          <div className="col-span-2">
+                            <div className="text-slate-500 text-xs mb-1 flex items-center gap-1">
+                              <Filter className="w-3 h-3" />
+                              数据筛选条件
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {task.filterBatchId && (
+                                <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded">批次: {task.filterBatchId.slice(0, 8)}...</span>
+                              )}
+                              {task.filterAnomalyStatus && (
+                                <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded">状态: {anomalyStatusLabel[task.filterAnomalyStatus] || task.filterAnomalyStatus}</span>
+                              )}
+                              {task.filterAnomalyType && (
+                                <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded">类型: {task.filterAnomalyType}</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
                         {task.conflictInfo && (
                           <div>
                             <div className="text-slate-500 text-xs mb-1">冲突文件信息</div>
@@ -447,6 +526,54 @@ export default function ExportTasks() {
         {exportTasksTotal > exportTasks.length && (
           <div className="px-5 py-3 text-center text-xs text-slate-400 border-t border-slate-100">
             显示 {exportTasks.length} / {exportTasksTotal} 条任务
+          </div>
+        )}
+          </>
+        ) : (
+          <div>
+            {exportGeneratedFiles.length === 0 ? (
+              <div className="text-center py-12 text-sm text-slate-400">暂无已生成的导出文件</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {exportGeneratedFiles.map((file) => (
+                  <div key={file.taskId} className="px-5 py-3 flex items-center gap-4 hover:bg-slate-50">
+                    <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
+                      {file.format === 'csv' ? (
+                        <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                      ) : (
+                        <FileJson className="w-4 h-4 text-green-600" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm text-slate-800">{file.finalFileName}</span>
+                        <span className="text-xs text-slate-500">{file.format.toUpperCase()}</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${file.exists ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {file.exists ? '文件存在' : '文件缺失'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5 truncate">
+                        {file.finalFilePath} · {formatFileSize(file.fileSize)} · {file.recordCount} 条记录 · {file.operator}
+                      </div>
+                      {(file.filters.batchId || file.filters.anomalyStatus || file.filters.anomalyType) && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <Filter className="w-3 h-3 text-slate-400" />
+                          <span className="text-xs text-slate-400">
+                            {[file.filters.batchId && '指定批次', file.filters.anomalyStatus && `状态:${anomalyStatusLabel[file.filters.anomalyStatus] || file.filters.anomalyStatus}`, file.filters.anomalyType && `类型:${file.filters.anomalyType}`].filter(Boolean).join(' · ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400 shrink-0">
+                      {file.completedAt ? new Date(file.completedAt).toLocaleString() : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="px-5 py-3 text-center text-xs text-slate-400 border-t border-slate-100">
+              共 {exportGeneratedFiles.length} 个已生成文件
+            </div>
           </div>
         )}
       </div>
@@ -498,6 +625,55 @@ export default function ExportTasks() {
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                     placeholder="导出员"
                   />
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Filter className="w-4 h-4 text-slate-500" />
+                  <span className="text-sm font-medium text-slate-700">数据筛选（可选）</span>
+                  <span className="text-xs text-slate-400">不选则导出全部异常</span>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">指定批次</label>
+                    <select
+                      value={formFilterBatchId}
+                      onChange={(e) => setFormFilterBatchId(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    >
+                      <option value="">全部批次</option>
+                      {exportFilterOptions?.batches.map((b) => (
+                        <option key={b.id} value={b.id}>{b.batchNo} ({b.fileName})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">异常状态</label>
+                    <select
+                      value={formFilterAnomalyStatus}
+                      onChange={(e) => setFormFilterAnomalyStatus(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    >
+                      <option value="">全部状态</option>
+                      {exportFilterOptions?.anomalyStatuses.map((s) => (
+                        <option key={s} value={s}>{anomalyStatusLabel[s] || s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">异常类型</label>
+                    <select
+                      value={formFilterAnomalyType}
+                      onChange={(e) => setFormFilterAnomalyType(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    >
+                      <option value="">全部类型</option>
+                      {exportFilterOptions?.anomalyTypes.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 

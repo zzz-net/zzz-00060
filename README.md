@@ -158,6 +158,57 @@ M002,李四,50,500,450,2026-06-01
 - 查看异常类型分布饼图和批次异常分布柱图
 - 导出 CSV 或 JSON 格式报告
 
+### 6. 导出任务台
+
+**入口**：左侧导航「导出任务台」（/export-tasks）
+
+**功能**：
+- 创建导出任务，选择文件格式（CSV/JSON）、保存目录、文件名
+- 设置数据筛选条件：按批次、异常状态、异常类型过滤导出数据
+- 配置文件名冲突处理策略：自动重命名、覆盖原文件、暂停等待手动处理
+- 实时查看任务状态（排队中 → 执行中 → 成功/失败/已取消）
+- 冲突文件处理：重命名、覆盖、切换导出目录、取消
+- 查看任务详情：文件路径、记录数、冲突信息、关键日志
+- 切换「已生成文件」标签页查看实际落盘的导出文件
+
+**操作示例**：
+
+1. **创建导出任务**：点击「创建导出任务」→ 选择格式、填写目录和文件名 → 可选设置筛选条件 → 提交
+2. **处理文件冲突**：任务检测到同名文件时自动暂停 → 弹窗选择处理方式（重命名/覆盖/换目录/取消）
+3. **重试失败任务**：点击失败任务的「重试」按钮 → 或点击「换目录重试」指定新目录
+4. **查看已生成文件**：切换「已生成文件」标签页 → 查看文件名、路径、大小、磁盘是否仍存在
+
+**CLI 操作**：
+
+```bash
+# 列出最近导出任务
+node --import tsx/esm api/cli.ts list
+
+# 按状态筛选
+node --import tsx/esm api/cli.ts list success
+
+# 查看任务统计
+node --import tsx/esm api/cli.ts summary
+
+# 查看单个任务详情（含完整日志）
+node --import tsx/esm api/cli.ts show <task-id>
+
+# 创建导出任务
+node --import tsx/esm api/cli.ts create --format csv --dir D:/exports --name report --conflict rename
+
+# 创建带筛选条件的导出任务
+node --import tsx/esm api/cli.ts create --format json --dir D:/exports --name pending_only --status pending
+
+# 重试失败任务
+node --import tsx/esm api/cli.ts retry <task-id>
+
+# 取消排队中任务
+node --import tsx/esm api/cli.ts cancel <task-id>
+
+# 查看已生成的导出文件
+node --import tsx/esm api/cli.ts files
+```
+
 ## 项目结构
 
 ```
@@ -277,7 +328,7 @@ python regression_tests.py --fresh
 确保后端服务已启动（`npm run server:dev`），然后运行：
 
 ```bash
-# 导出任务台完整自动化测试（7 大场景，约 50+ 断言）
+# 导出任务台完整自动化测试（11 大场景，约 80+ 断言）
 npm run test:export
 # 或
 python test_export_tasks.py
@@ -293,7 +344,11 @@ python test_export_tasks.py
 | 权限报错 | 无效目录/不可写目录触发失败，记录失败原因 |
 | 失败后换目录重试 | 失败任务切换到有效目录后重新执行成功 |
 | 取消与状态流转 | 排队中任务取消 → 已取消 → 重试 → 成功的完整状态链 |
-| 重启恢复/持久化 | 任务创建后重新查询，验证所有字段（ID、taskNo、状态、文件名、路径、大小、日志）均持久化保留 |
+| 重启恢复/持久化 | 任务创建后重新查询，验证所有字段均持久化保留 |
+| 预检冲突接口 | 检测同名文件是否存在，提供备选文件名 |
+| 数据筛选功能 | 按批次/状态/类型筛选导出数据，验证筛选条件持久化 |
+| 已生成文件列表 | 查询成功任务生成的文件，验证磁盘存在状态一致 |
+| 一致性验证 | API 返回、磁盘文件、生成文件列表三维度数据一致 |
 
 ## 常见问题
 

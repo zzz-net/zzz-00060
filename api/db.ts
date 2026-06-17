@@ -241,11 +241,25 @@ CREATE TABLE IF NOT EXISTS export_tasks (
   createdAt TEXT NOT NULL DEFAULT (datetime('now')),
   startedAt TEXT DEFAULT '',
   completedAt TEXT DEFAULT '',
-  durationMs INTEGER DEFAULT 0
+  durationMs INTEGER DEFAULT 0,
+  filterBatchId TEXT DEFAULT '',
+  filterAnomalyStatus TEXT DEFAULT '',
+  filterAnomalyType TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_export_tasks_status ON export_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_export_tasks_created ON export_tasks(createdAt);
 `)
+
+const etCols = db.prepare("PRAGMA table_info(export_tasks)").all() as any[]
+if (!etCols.find(c => c.name === 'filterBatchId')) {
+  db.exec("ALTER TABLE export_tasks ADD COLUMN filterBatchId TEXT DEFAULT ''")
+}
+if (!etCols.find(c => c.name === 'filterAnomalyStatus')) {
+  db.exec("ALTER TABLE export_tasks ADD COLUMN filterAnomalyStatus TEXT DEFAULT ''")
+}
+if (!etCols.find(c => c.name === 'filterAnomalyType')) {
+  db.exec("ALTER TABLE export_tasks ADD COLUMN filterAnomalyType TEXT DEFAULT ''")
+}
 
 export default db

@@ -17,6 +17,9 @@ function parseRow(row: any): any {
     conflictInfo: row.conflictInfo ? JSON.parse(row.conflictInfo) : null,
     keyLogs: row.keyLogs ? JSON.parse(row.keyLogs) : [],
     conflictResolved: !!row.conflictResolved,
+    filterBatchId: row.filterBatchId || '',
+    filterAnomalyStatus: row.filterAnomalyStatus || '',
+    filterAnomalyType: row.filterAnomalyType || '',
   }
 }
 
@@ -25,7 +28,25 @@ function appendLog(logs: string[], msg: string): string[] {
   return [...logs, `[${timestamp}] ${msg}`]
 }
 
-function getExportData() {
+function getExportData(filters?: { batchId?: string; anomalyStatus?: string; anomalyType?: string }) {
+  let whereParts: string[] = []
+  const params: any[] = []
+
+  if (filters?.batchId) {
+    whereParts.push('a.batchId = ?')
+    params.push(filters.batchId)
+  }
+  if (filters?.anomalyStatus) {
+    whereParts.push('a.status = ?')
+    params.push(filters.anomalyStatus)
+  }
+  if (filters?.anomalyType) {
+    whereParts.push('a.anomalyType = ?')
+    params.push(filters.anomalyType)
+  }
+
+  const whereClause = whereParts.length > 0 ? 'WHERE ' + whereParts.join(' AND ') : ''
+
   const anomalies = db.prepare(`
     SELECT a.id, a.anomalyType, a.description, a.status, a.createdAt,
       r.meterNo, r.meterName, r.prevReading, r.currReading, r.usage, r.readDate,
@@ -35,8 +56,9 @@ function getExportData() {
     LEFT JOIN readings r ON r.id = a.readingId
     LEFT JOIN rules ru ON ru.id = a.ruleId
     LEFT JOIN batches b ON b.id = a.batchId
+    ${whereClause}
     ORDER BY a.createdAt DESC
-  `).all() as any[]
+  `).all(...params) as any[]
 
   const anomalyIds = anomalies.map(a => a.id)
   const judgments = anomalyIds.length > 0
@@ -264,8 +286,12 @@ function executeTask(taskId: string): void {
     }
 
     logs = appendLog(logs, `准备导出数据 (format=${format})`)
-    const data = getExportData()
-    logs = appendLog(logs, `获取 ${data.length} 条记录`)
+    const filters: { batchId?: string; anomalyStatus?: string; anomalyType?: string } = {}
+    if (taskRow.filterBatchId) filters.batchId = taskRow.filterBatchId
+    if (taskRow.filterAnomalyStatus) filters.anomalyStatus = taskRow.filterAnomalyStatus
+    if (taskRow.filterAnomalyType) filters.anomalyType = taskRow.filterAnomalyType
+    const data = getExportData(Object.keys(filters).length > 0 ? filters : undefined)
+    logs = appendLog(logs, `获取 ${data.length} 条记录${Object.keys(filters).length > 0 ? ` (筛选: ${JSON.stringify(filters)})` : ''}`)
 
     let finalName = fileName
     let finalPath = path.join(dirCheck.resolvedDir, fileName)
@@ -338,6 +364,59 @@ function executeTask(taskId: string): void {
     `).run(errorMsg, JSON.stringify(logs), completedAt, duration, taskId)
   }
 }
+
+router.get('/filter-options', (_req: Request, res: Response): void => {
+  const batches = db.prepare('SELECT id, batchNo, fileName FROM batches ORDER BY createdAt DESC').all() as any[]
+  const statuses = db.prepare('SELECT DISTINCT status FROM anomalies ORDER BY status').all() as any[]
+  const types = db.prepare('SELECT DISTINCT anomalyType FROM anomalies ORDER BY anomalyType').all() as any[]
+
+  res.json({
+    success: true,
+    data: {
+      batches: batches.map(b => ({ id: b.id, batchNo: b.batchNo, fileName: b.fileName })),
+      anomalyStatuses: statuses.map(s => s.status),
+      anomalyTypes: types.map(t => t.anomalyType),
+    },
+  })
+})
+
+router.get('/generated-files', (req: Request, res: Response): void => {
+  const limit = Math.min(parseInt((req.query.limit as string) || '50', 10), 200)
+
+  const rows = db.prepare(`
+    SELECT id, taskNo, format, exportDir, fileName, finalFileName, finalFilePath,
+      fileSize, recordCount, status, conflictAction, operator, createdAt, completedAt,
+      filterBatchId, filterAnomalyStatus, filterAnomalyType
+    FROM export_tasks
+    WHERE status = 'success' AND finalFilePath != ''
+    ORDER BY completedAt DESC
+    LIMIT ?
+  `).all(limit) as any[]
+
+  const files = rows.map(r => ({
+    taskId: r.id,
+    taskNo: r.taskNo,
+    format: r.format,
+    exportDir: r.exportDir,
+    originalFileName: r.fileName,
+    finalFileName: r.finalFileName,
+    finalFilePath: r.finalFilePath,
+    fileSize: r.fileSize,
+    recordCount: r.recordCount,
+    conflictAction: r.conflictAction,
+    operator: r.operator,
+    createdAt: r.createdAt,
+    completedAt: r.completedAt,
+    exists: fs.existsSync(r.finalFilePath),
+    filters: {
+      batchId: r.filterBatchId || '',
+      anomalyStatus: r.filterAnomalyStatus || '',
+      anomalyType: r.filterAnomalyType || '',
+    },
+  }))
+
+  res.json({ success: true, data: files, total: files.length })
+})
 
 router.get('/summary', (_req: Request, res: Response): void => {
   const total = (db.prepare('SELECT COUNT(*) as count FROM export_tasks').get() as any).count
@@ -426,6 +505,9 @@ router.post('/', (req: Request, res: Response): void => {
     conflictAction = '',
     newFileName,
     operator = '导出员',
+    filterBatchId = '',
+    filterAnomalyStatus = '',
+    filterAnomalyType = '',
   } = req.body
 
   if (!format || !['csv', 'json'].includes(format)) {
@@ -446,16 +528,22 @@ router.post('/', (req: Request, res: Response): void => {
   const createdAt = new Date().toISOString()
   let logs: string[] = []
   logs = appendLog(logs, `任务创建: ${taskNo}`)
-  logs = appendLog(logs, `参数: format=${format}, dir=${exportDir}, file=${fileName}`)
+  const filterDesc: string[] = []
+  if (filterBatchId) filterDesc.push(`批次=${filterBatchId}`)
+  if (filterAnomalyStatus) filterDesc.push(`状态=${filterAnomalyStatus}`)
+  if (filterAnomalyType) filterDesc.push(`类型=${filterAnomalyType}`)
+  logs = appendLog(logs, `参数: format=${format}, dir=${exportDir}, file=${fileName}${filterDesc.length > 0 ? `, 筛选: ${filterDesc.join(', ')}` : ''}`)
 
   db.prepare(`
     INSERT INTO export_tasks (
       id, taskNo, status, format, exportDir, fileName,
-      finalFileName, conflictAction, keyLogs, operator, createdAt
-    ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+      finalFileName, conflictAction, keyLogs, operator, createdAt,
+      filterBatchId, filterAnomalyStatus, filterAnomalyType
+    ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, taskNo, format, exportDir, fileName,
     newFileName || '', conflictAction || '', JSON.stringify(logs), operator, createdAt,
+    filterBatchId, filterAnomalyStatus, filterAnomalyType,
   )
 
   setImmediate(() => executeTask(id))
